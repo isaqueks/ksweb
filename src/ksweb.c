@@ -632,7 +632,7 @@ uint32_t ksweb_header(void)
     d[9] = hdr.ram_base;    d[10] = hdr.ram_min;   d[11] = hdr.stack_size;
     d[12] = hdr.sym_off;    d[13] = hdr.sym_size;  d[14] = hdr.checksum;
     d[15] = rb;             d[16] = ram_size;
-    d[17] = rb + (ram_size & ~3u);
+    d[17] = (rb + ram_size) & ~3u;          /* como plan_ram do loader */
     d[18] = vm.stack_limit; d[19] = vm.heap_start;
     d[20] = image_size;     d[21] = loaded ? 1u : 0u;
     return (uint32_t)(uintptr_t)info_buf;

@@ -528,6 +528,26 @@ test('millis-desde-o-boot-de-cada-carga', () => {
   eq(native(PROG.millis).rc < 50, true, 'nativo também começa perto de 0');
 });
 
+test('cabecalho-sp0-com-ram-base-desalinhada', () => {
+  /* ram_base fica fora do checksum; o loader aceita base não alinhada e
+   * põe sp = (base + ram) & ~3. */
+  const img = Buffer.from(helloBytes);
+  img.writeUInt32LE(0x10002, 0x20);
+  const core = newCore();
+  const s = new KsSession(core, { ramSize: 4096 });
+  eq(s.load(img), null, 'load');
+  const h = core.header();
+  eq(h.ramBase, 0x10002, 'ram_base efetivo');
+  eq(h.sp0, core.reg(31), 'sp0 do cabeçalho = sp do núcleo');
+  eq(h.sp0, 0x11000, 'sp0 alinhado para baixo');
+});
+{
+  const img = Buffer.from(helloBytes);
+  img.writeUInt32LE(0x10002, 0x20);
+  fs.writeFileSync(path.join(WORK, 'hello-base-desalinhada.ksx'), img);
+  compare('runner-ram-base-desalinhada', path.join(WORK, 'hello-base-desalinhada.ksx'), { ram: 4096 });
+}
+
 test('cpu-snapshot-e-registradores', () => {
   const core = newCore();
   const s = new KsSession(core, {});
