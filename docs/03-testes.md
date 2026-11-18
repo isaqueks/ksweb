@@ -7,7 +7,7 @@ pelo Makefile da ksvm2.
 | Script | Casos | O que cobre |
 |--------|------:|-------------|
 | `test/run_node.js` | 97 | wasm × `ksvm` nativo e a API do ksweb |
-| `test/test_vt.js` | 59 | emulador VT puro (`web/vt.js`) |
+| `test/test_vt.js` | 60 | emulador VT puro (`web/vt.js`) |
 | `test/test_format.js` | 10 | formatadores do depurador (`web/format.js`) |
 | `test/test_lineedit.js` | 8 | teclado → bytes e editor de linha (`web/input.js`) com eco pelo VT |
 | `test/test_terminal.js` | 5 | `TerminalView` (`web/terminal.js`) num DOM falso: teclado, mensagens do runner, HTML escapado |
@@ -95,7 +95,8 @@ dupla (CJK, emoji, quebra na última coluna, sobrescrita de metade),
 combinantes, redimensionamento e linhas sujas. Regressões da revisão: CUU/CUD
 vindo de fora da região param na margem, IL/DL cancelam o wrap pendente,
 SGR 38/48 inválido ou incompleto é ignorado, ESC aborta DCS/APC sem ST,
-ECH/DCH ao lado de caractere largo, DECSTBM com fundo além da tela, e a
+ECH/DCH ao lado de caractere largo, DECSTBM com fundo além da tela,
+combinantes limitados por célula, e a
 escrita fora de banda (`outOfBand`) no meio de OSC/CSI do guest. O último caso roda o
 `vtdemo` no wasm e confere a caixa, a barra (truecolor) e o texto final.
 
