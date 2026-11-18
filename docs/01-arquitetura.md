@@ -59,26 +59,34 @@ dos cabeçalhos COOP/COEP — indisponíveis em `file://` e no GitHub Pages). Em
 vez de deixar o guest girar num laço de `GETC`, a HAL trata cada syscall de
 entrada como uma transação:
 
-1. no primeiro `getc` de uma syscall, guarda `pc`, `insn_count`, `r1`, `r2`
-   e a posição de leitura do anel (durante a execução de `SYSCALL` o núcleo
-   ainda não avançou `pc` nem `insn_count`, o que identifica a syscall);
-2. se o anel esvazia antes de a syscall terminar, devolve a posição de
-   leitura ao ponto guardado, marca `want_input` e põe a VM em `KSVM_YIELD`
-   (o `ksvm_run` sai depois desta instrução);
+1. no primeiro `getc` de uma syscall, guarda `pc`, `insn_count`, `r1` e `r2`
+   (durante a execução de `SYSCALL` o núcleo ainda não avançou `pc` nem
+   `insn_count`, o que identifica a syscall);
+2. se o anel esvazia antes de a syscall terminar, marca `want_input` e põe
+   a VM em `KSVM_YIELD` (o `ksvm_run` sai depois desta instrução);
 3. `ksweb_run` chama `ksweb_hal_rewind`, que restaura `pc`, `insn_count`,
    `r1` e `r2`, tira a instrução do trace e devolve `KSWEB_WAIT_INPUT`.
 
 Quando a página entrega entrada (ou EOF), o worker retoma e a mesma
 `SYSCALL` executa do zero. Para o guest isso é exatamente um `read(2)`
 bloqueante — o comportamento do `ksvm` nativo com stdin redirecionado —,
-inclusive para `GETS` com uma linha que chega aos pedaços (os bytes
-devolvidos ao anel são relidos). Enquanto espera, nenhuma instrução executa.
+inclusive para `GETS` com uma linha que chega aos pedaços. Enquanto espera,
+nenhuma instrução executa.
+
+Os bytes que a `GETS` desfeita já tinha copiado para o buffer do guest
+(`r1 + 0..n-1`) saem do anel: a repetição da syscall (mesmos `pc`,
+`insn_count` e `r1`) os relê do próprio buffer, um a um, antes de regravá-los
+no mesmo lugar — nenhuma instrução do guest executa entre o desfazer e a
+repetição. Assim uma linha sem `\n` maior que o anel de 64 KiB não o entope.
+Quando a syscall esvazia o anel e ainda há entrada na fila do `KsSession`,
+`tick` entrega mais e continua, sem esperar outra mensagem da página.
 
 Com **stdin não bloqueante (poll)** a HAL devolve `KSVM_HAL_NODATA` ao guest
 (`r1 = -1`, `r2 = AGAIN`), como `ksvm --stdin-poll`; o programa decide se
 cede (`YIELD`) ou gira. Depois de EOF e com o anel vazio, `getc` devolve
-`KSVM_HAL_EOF` para sempre (como o runner com stdin de arquivo); Reiniciar
-zera isso.
+`KSVM_HAL_EOF` (como o runner com stdin de arquivo); Reiniciar zera isso.
+Diferença conhecida: entrada que chega depois do EOF ainda é entregue (como
+num tty), enquanto o `hal_posix` nativo trata o EOF como definitivo.
 
 ## 4. Worker e protocolo de mensagens
 

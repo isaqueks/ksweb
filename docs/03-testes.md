@@ -39,9 +39,11 @@ entrada e opções:
 - **RAM inválida** (0 e acima de 64 MiB → 64, como `ksvm --ram 0`).
 - **Entrada**: suspensão sem girar (várias fatias seguidas em `WAIT_INPUT`
   sem nenhuma instrução executada e com o pc parado no `GETC`), retomada
-  com entrada e EOF; `GETS` com a linha chegando aos pedaços (os bytes
-  voltam ao anel e a saída bate com o nativo); modo poll com `YIELD`; entrada
-  maior que o anel de 64 KiB; EOF imediato.
+  com entrada e EOF; `GETS` com a linha chegando aos pedaços (os bytes já
+  copiados saem do anel e a saída bate com o nativo); modo poll com
+  `YIELD`; entrada maior que o anel de 64 KiB; um único `GETS` de 200000
+  bytes (`test/progs/bigread.ksasm`) com 100000 e 250000 bytes sem `\n`, e
+  com a entrada chegando em pedaços de 7000; EOF imediato.
 - **SLEEP_MS/YIELD**: o `vtdemo` cede 40 vezes com prazo de 25 ms.
 - **Limite** exato de instruções com fatias menores que o limite.
 - **`ksweb_step` + disasm × `ksdis`**: para cada exemplo, 400 passos; em
