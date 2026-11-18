@@ -455,6 +455,20 @@ test('dcs-sem-st-e-abortado-por-esc', () => {
   s.write(E + '_apc' + E + 'c');
   eq(s.screenText(), '', 'ESC c (RIS) também aborta APC');
 });
+test('ech-el-vizinhos-de-largo', () => {
+  let s = vt(6, 1);
+  s.write('ab中d' + E + '[1G' + E + '[2X');
+  eq(s.lineText(0), '  中d', 'ECH até antes de um largo não o desfaz');
+  eq(!!(s.cell(2, 0).fl & ATTR.WIDE), true, 'continua largo');
+  s = vt(6, 1);
+  s.write('a中de' + E + '[1G' + E + '[2X');
+  eq(s.lineText(0), '   de', 'ECH sobre a metade esquerda apaga o largo inteiro');
+  eq(s.cell(2, 0).c, ' ', 'a metade direita vira espaço');
+  s = vt(6, 1);
+  s.write('a中de' + E + '[2G' + E + '[P');
+  eq(s.lineText(0), 'a de', 'DCH na metade esquerda');
+  eq(s.cell(1, 0).fl & (ATTR.WIDE | ATTR.WIDE_CONT), 0, 'sem metade órfã');
+});
 
 /* ---- resize ---- */
 test('resize', () => {

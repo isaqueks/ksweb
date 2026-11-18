@@ -384,7 +384,14 @@
         const p = line.cells[x - 1];
         p.c = ' '; p.fl &= ~ATTR.WIDE;
       }
+      if (c.fl & ATTR.WIDE_CONT && c.c === '') c.c = ' ';
       c.fl &= ~(ATTR.WIDE | ATTR.WIDE_CONT);
+    }
+
+    /* Antes de cortar a linha entre x - 1 e x: um largo que atravessa o
+     * corte perde as duas metades. */
+    _splitWide(line, x) {
+      if (x > 0 && x < this.cols && (line.cells[x].fl & ATTR.WIDE_CONT)) this._clearWideAt(line, x);
     }
 
     /* ---- rolagem ---- */
@@ -434,8 +441,8 @@
     _eraseCells(y, x0, n) {
       const line = this.lines[y];
       const end = Math.min(this.cols, x0 + n);
-      if (x0 > 0) this._clearWideAt(line, x0);
-      if (end < this.cols) this._clearWideAt(line, end);
+      if (x0 < end) this._clearWideAt(line, x0);
+      this._splitWide(line, end);
       for (let x = Math.max(0, x0); x < end; x++) {
         const c = line.cells[x];
         c.c = ' '; c.fg = -1; c.bg = this.bg; c.fl = 0;
@@ -451,6 +458,8 @@
     _insertCells(n) {
       const line = this.lines[this.y];
       n = Math.min(n, this.cols - this.x);
+      this._splitWide(line, this.x);
+      this._splitWide(line, this.cols - n);          /* o que sai pela direita */
       for (let i = 0; i < n; i++) {
         line.cells.splice(this.cols - 1, 1);
         line.cells.splice(this.x, 0, blankCell(this.bg));
@@ -461,6 +470,8 @@
     _deleteCells(n) {
       const line = this.lines[this.y];
       n = Math.min(n, this.cols - this.x);
+      this._splitWide(line, this.x);
+      this._splitWide(line, this.x + n);
       for (let i = 0; i < n; i++) {
         line.cells.splice(this.x, 1);
         line.cells.push(blankCell(this.bg));
