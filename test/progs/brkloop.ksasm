@@ -1,0 +1,13 @@
+; brkloop.ksasm — BRK num laço de 20 voltas: o trace (--trace) de cada BRK
+; traz o dump de registradores; o anel do ksweb tem de guardar todos.
+        .text
+        .global _start
+_start:
+        li      r16, 20
+loop:
+        brk
+        dec     r16
+        cmpi    r16, 0
+        bne     loop
+        li      r1, 0
+        halt

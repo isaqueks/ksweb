@@ -38,7 +38,11 @@ typedef struct brk_snap {
     uint32_t seq;                /* número do registro de trace que o usa */
 } brk_snap;
 
-#define BRK_SNAPS 16u
+/* Cada BRK grava dois registros (BRK e o passo dele), então o anel de
+ * trace tem no máximo KSWEB_TRACE_MAX / 2 BRKs: com um retrato para cada um,
+ * todo BRK do anel sai com o dump de registradores, como no ksvm --trace.
+ * (~4,7 MB de .bss: não entram no arquivo.) */
+#define BRK_SNAPS (KSWEB_TRACE_MAX / 2u + 1u)
 #define NO_BRK    0xFFFFu
 
 static ksvm      vm;

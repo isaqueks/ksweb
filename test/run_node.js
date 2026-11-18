@@ -152,7 +152,7 @@ badMagic[0] = 0;
 fs.writeFileSync(path.join(WORK, 'badmagic.ksx'), badMagic);
 /* programas de regressão em test/progs/ */
 const PROG = {};
-for (const p of ['bigread', 'millis']) {
+for (const p of ['bigread', 'millis', 'brkloop']) {
   PROG[p] = path.join(WORK, p + '.ksx');
   const r = spawnSync(KSAS, [path.join(__dirname, 'progs', p + '.ksasm'), '-o', PROG[p]]);
   if (r.status !== 0) { console.log('ksas ' + p + ' falhou: ' + r.stderr); process.exit(1); }
@@ -193,6 +193,20 @@ compare('runner-trace-fault', MK.fault, { trace: true });
 compare('runner-trace-rawedge', MK.rawedge, { trace: true, maxInsns: 100000 });
 compare('runner-trace-echo', MK.echo, { trace: true, input: 'ab\nc' });
 compare('runner-trace-limit', MK.loop, { trace: true, maxInsns: 50 });
+compare('trace-20-brk-com-registradores', PROG.brkloop, { trace: true });
+
+test('trace-brk-em-anel-pequeno', () => {
+  /* anel de 25 registros: a cauda do trace nativo, inclusive os dumps */
+  const core = newCore();
+  const s = new KsSession(core, {});
+  s.load(fs.readFileSync(PROG.brkloop));
+  core.traceEnable(25);
+  s.runSync('');
+  const wt = core.traceText();
+  const nt = native(PROG.brkloop, { trace: true }).stderr;
+  ok(nt.endsWith(wt), 'sufixo do trace nativo');
+  eq((wt.match(/^brk at/mg) || []).length, (wt.match(/^pc=0x/mg) || []).length, 'cada BRK com seus registradores');
+});
 
 test('runner-ram-invalida', () => {
   const core = newCore();
