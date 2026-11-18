@@ -411,6 +411,23 @@ test('combinantes-juntam', () => {
   eq(s.cell(0, 0).c, 'é'); eq(s.x, 2);
 });
 
+/* ---- regressões (revisão) ---- */
+test('cuu-cud-fora-da-regiao-param-na-margem', () => {
+  /* xterm (CursorUp/CursorDown): abaixo da região, CUU para na margem de
+   * cima; acima dela, CUD para na margem de baixo. */
+  const s = vt(5, 10);
+  s.write(E + '[3;6r' + E + '[9;1H' + E + '[20A');
+  eq(s.y, 2, 'CUU de baixo da região para no topo dela');
+  s.write(E + '[1;1H' + E + '[20B');
+  eq(s.y, 5, 'CUD de cima da região para no fundo dela');
+  s.write(E + '[8;1H' + E + '[1A');
+  eq(s.y, 6, 'CUU curto abaixo da região anda normalmente');
+  s.write(E + '[9;1H' + E + '[5B');
+  eq(s.y, 9, 'CUD abaixo da região vai até a última linha');
+  s.write(E + '[2;1H' + E + '[20F');
+  eq([s.x, s.y], [0, 0], 'CPL acima da região vai até a linha 1');
+});
+
 /* ---- resize ---- */
 test('resize', () => {
   const s = vt(10, 4);

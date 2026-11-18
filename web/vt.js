@@ -496,11 +496,14 @@
       this.y = Math.max(minY, Math.min(maxY, y));
     }
 
-    /* CUU/CUD respeitam a região de rolagem se o cursor estiver nela. */
+    /* CUU/CUD/CNL/CPL param na margem da região quando andam em direção a
+     * ela (xterm CursorUp/CursorDown): para cima, na margem de cima se o
+     * cursor não está acima da região; para baixo, na de baixo se ele não
+     * está abaixo dela. */
     _moveVert(d) {
       this.wrapPending = false;
-      let lo = 0, hi = this.rows - 1;
-      if (this.y >= this.top && this.y <= this.bottom) { lo = this.top; hi = this.bottom; }
+      const lo = (d < 0 && this.y >= this.top) ? this.top : 0;
+      const hi = (d > 0 && this.y <= this.bottom) ? this.bottom : this.rows - 1;
       this.y = Math.max(lo, Math.min(hi, this.y + d));
     }
 
