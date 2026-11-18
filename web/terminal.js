@@ -164,7 +164,10 @@
       this.el.addEventListener('keydown', (e) => this._keydown(e));
       this.el.addEventListener('focus', () => { this.focused = true; this._dirtyCursor(); });
       this.el.addEventListener('blur', () => { this.focused = false; this._dirtyCursor(); });
-      this.el.addEventListener('paste', (e) => {
+      /* No document: alguns navegadores entregam o paste ao body quando o
+       * foco está num elemento não editável. */
+      document.addEventListener('paste', (e) => {
+        if (document.activeElement !== this.el) return;
         const t = (e.clipboardData || window.clipboardData).getData('text');
         if (t) { e.preventDefault(); this.paste(t); }
       });
