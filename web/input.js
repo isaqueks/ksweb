@@ -25,9 +25,10 @@
     return m > 1 ? m : 0;
   }
 
-  /* Ctrl + caractere -> C0 (ou null). */
+  /* Ctrl + caractere ASCII -> C0 (ou null). Fora do ASCII toUpperCase pode
+   * mudar a letra ('ß' -> 'SS', 'ı' -> 'I'): Ctrl+ß virava XOFF (0x13). */
   function ctrlChar(k) {
-    if (k.length !== 1) return null;
+    if (k.length !== 1 || k.charCodeAt(0) > 0x7E) return null;
     const c = k.toUpperCase().charCodeAt(0);
     if (c >= 0x40 && c <= 0x5F) return String.fromCharCode(c & 0x1F);   /* @ A-Z [ \ ] ^ _ */
     if (k === ' ' || k === '2') return '\x00';
