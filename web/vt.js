@@ -466,6 +466,7 @@
 
     _insertLines(n) {
       if (this.y < this.top || this.y > this.bottom) return;
+      this.wrapPending = false;
       n = Math.min(n, this.bottom - this.y + 1);
       for (let i = 0; i < n; i++) {
         this.lines.splice(this.bottom, 1);
@@ -477,6 +478,7 @@
 
     _deleteLines(n) {
       if (this.y < this.top || this.y > this.bottom) return;
+      this.wrapPending = false;
       n = Math.min(n, this.bottom - this.y + 1);
       for (let i = 0; i < n; i++) {
         this.lines.splice(this.y, 1);

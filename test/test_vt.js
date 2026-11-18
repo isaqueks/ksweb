@@ -427,6 +427,14 @@ test('cuu-cud-fora-da-regiao-param-na-margem', () => {
   s.write(E + '[2;1H' + E + '[20F');
   eq([s.x, s.y], [0, 0], 'CPL acima da região vai até a linha 1');
 });
+test('il-dl-cancelam-wrap-pendente', () => {
+  for (const f of ['L', 'M']) {
+    const s = vt(5, 4);
+    s.write(E + '[2;1Habcde' + E + '[' + f + 'X');
+    eq([s.x, s.y], [1, 1], f + ': cursor na coluna 1 da mesma linha');
+    eq(s.cell(0, 1).c, 'X', f + ': X na coluna 0, sem quebrar a linha');
+  }
+});
 
 /* ---- resize ---- */
 test('resize', () => {
