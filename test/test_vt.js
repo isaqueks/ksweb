@@ -12,6 +12,7 @@ function eq(a, b, what) {
   const sa = JSON.stringify(a), sb = JSON.stringify(b);
   if (sa !== sb) throw new Error((what || 'valor') + ': ' + sa + ' != esperado ' + sb);
 }
+function ok(c, what) { if (!c) throw new Error(what || 'condição falsa'); }
 function vt(cols, rows, opts) {
   return new VtScreen(Object.assign({ cols: cols || 20, rows: rows || 5 }, opts || {}));
 }
@@ -494,6 +495,16 @@ test('decstbm-fundo-alem-da-tela-vale-a-ultima-linha', () => {
   eq(cur(s), [0, 0], 'e o cursor vai ao início');
   s.write(E + '[4;4r' + E + '[5;5H' + E + '[11;20r');
   eq([s.top, s.bottom, s.y], [1, 9, 4], 'topo >= fundo: ignorado');
+});
+
+test('combinantes-limitados-por-celula', () => {
+  /* Um guest que manda milhões de acentos seguidos não pode fazer uma
+   * célula crescer sem limite (o xterm guarda poucos por célula). */
+  const s = vt(10, 2);
+  s.write('a' + '\u0301'.repeat(100000) + 'b');
+  ok(s.cell(0, 0).c.length <= 33, 'célula limitada: ' + s.cell(0, 0).c.length);
+  eq(s.cell(0, 0).c.slice(0, 2), 'a\u0301', 'o primeiro acento fica');
+  eq(s.cell(1, 0).c, 'b', 'o texto seguinte não é afetado');
 });
 
 /* ---- resize ---- */

@@ -104,6 +104,7 @@
 
   const S = { GROUND: 0, ESC: 1, ESC_INT: 2, CSI: 3, CSI_IGNORE: 4, OSC: 5, STR: 6, STR_ESC: 7, OSC_ESC: 8 };
   const OSC_MAX = 4096;
+  const COMBINE_MAX = 32;        /* UTF-16 por célula (base + combinantes) */
 
   class VtScreen {
     constructor(opts) {
@@ -343,6 +344,7 @@
       let line = this.lines[this.y];
       if (x < 0) return;
       if (line.cells[x].fl & ATTR.WIDE_CONT && x > 0) x--;
+      if (line.cells[x].c.length + s.length > COMBINE_MAX) return;   /* limite por célula */
       line.cells[x].c += s;
       line.dirty = true;
     }
