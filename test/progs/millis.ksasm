@@ -1,0 +1,6 @@
+; millis.ksasm — sai com MILLIS (& 0xFF): "ms desde o boot" da VM.
+        .text
+        .global _start
+_start:
+        syscall MILLIS
+        syscall EXIT

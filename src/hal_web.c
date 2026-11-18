@@ -9,17 +9,22 @@
  *
  *   1. no primeiro getc de uma syscall (pc e insn_count ainda são os da
  *      instrução SYSCALL durante a execução dela), guarda pc, insn_count,
- *      r1, r2 e a posição de leitura do anel;
- *   2. se o anel esvazia antes de a syscall terminar, devolve a posição de
- *      leitura ao ponto guardado (os bytes voltam a estar disponíveis),
- *      marca want_input e põe a VM em KSVM_YIELD, o que faz ksvm_run sair;
+ *      r1 e r2;
+ *   2. se o anel esvazia antes de a syscall terminar, marca want_input e
+ *      põe a VM em KSVM_YIELD, o que faz ksvm_run sair;
  *   3. ksweb_hal_rewind (chamado por ksweb.c depois de ksvm_run/ksvm_step)
  *      restaura pc, insn_count, r1 e r2: a SYSCALL é repetida do zero
  *      quando o JS entregar mais entrada.
  *
- * GETS que já tinha copiado parte da linha para o buffer do guest vai
- * copiar os mesmos bytes de novo, então o efeito visível é idêntico ao de
- * uma leitura bloqueante (o que o runner nativo faz com stdin redirecionado).
+ * Só GETS consome bytes antes de faltar dado (GETC desfeita não leu nada).
+ * Esses bytes já estão no buffer do guest, em r1 + 0..n-1, na ordem em que
+ * a repetição vai pedi-los: em vez de devolvê-los ao anel (que poderia
+ * encher com uma linha maior que ele e travar a VM), a HAL os tira do anel
+ * e, na repetição, entrega cada um relendo o próprio buffer do guest antes
+ * de a GETS regravá-lo no mesmo lugar. Entre o desfazer e a repetição
+ * nenhuma instrução do guest executa, então o buffer está intacto e o
+ * efeito é o de uma leitura bloqueante (o runner nativo com stdin
+ * redirecionado).
  */
 #include "hal_web.h"
 
@@ -52,7 +57,12 @@ static void tx_begin(ksweb_hal *h)
     h->tx_count = vm->insn_count;
     h->tx_r1 = vm->cpu.r[1];
     h->tx_r2 = vm->cpu.r[2];
-    h->tx_head = h->in_head;
+    h->tx_got = 0u;
+    h->replay_pos = 0u;
+    if (h->replay_n != 0u && (h->replay_pc != h->tx_pc || h->replay_count != h->tx_count ||
+                              h->replay_ptr != h->tx_r1)) {
+        h->replay_n = 0u;                  /* não é a repetição da syscall desfeita */
+    }
 }
 
 static int web_getc(void *ctx)
@@ -61,16 +71,27 @@ static int web_getc(void *ctx)
     uint8_t c;
 
     tx_begin(h);
+    if (h->replay_pos < h->replay_n) {     /* repetição: o guest já tem o byte */
+        c = 0u;
+        (void)ksvm_bus_read8(&h->vm->bus, h->replay_ptr + h->replay_pos, &c);
+        h->replay_pos++;
+        h->tx_got++;
+        return c;
+    }
     if (h->in_head != h->in_tail) {
         c = h->in[h->in_head & IN_MASK];
         h->in_head++;
+        h->tx_got++;
         return c;
     }
     if (h->eof) {
         return KSVM_HAL_EOF;
     }
     if (h->block) {
-        h->in_head = h->tx_head;           /* devolve o que esta syscall leu */
+        h->replay_pc = h->tx_pc;           /* a repetição relê os tx_got bytes */
+        h->replay_count = h->tx_count;
+        h->replay_ptr = h->tx_r1;
+        h->replay_n = h->tx_got;
         h->want_input = true;
         h->vm->status = KSVM_YIELD;        /* ksvm_run sai após esta instrução */
     }
@@ -117,6 +138,9 @@ void ksweb_hal_init(ksweb_hal *h, ksvm_hal *hal, ksvm *vm)
     h->eof = false;
     h->block = true;
     h->tx_valid = false;
+    h->tx_got = 0u;
+    h->replay_n = 0u;
+    h->replay_pos = 0u;
     h->want_input = false;
     h->sleep_ms = 0u;
     h->halted = false;

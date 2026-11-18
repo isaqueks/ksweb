@@ -7,11 +7,12 @@
  *             Sem dado, no modo bloqueante (padrão): a HAL desfaz a
  *             syscall (GETC/GETS) e pede que o laço pare com WAIT_INPUT;
  *             quando chegar entrada, a mesma syscall é executada de novo,
- *             o que equivale a um read(2) bloqueante. No modo poll devolve
- *             KSVM_HAL_NODATA ao guest (r1 = -1, r2 = AGAIN), como o
- *             "ksvm --stdin-poll". Depois de EOF (Ctrl+D) e com o anel
- *             vazio, getc devolve KSVM_HAL_EOF para sempre (como o runner
- *             nativo com stdin redirecionado).
+ *             o que equivale a um read(2) bloqueante. Os bytes que uma
+ *             GETS desfeita já tinha copiado para o buffer do guest saem do
+ *             anel e a repetição os relê de lá (uma linha pode ser maior que
+ *             o anel). No modo poll devolve KSVM_HAL_NODATA ao guest
+ *             (r1 = -1, r2 = AGAIN), como o "ksvm --stdin-poll". Depois de
+ *             EOF (Ctrl+D), com o anel vazio, getc devolve KSVM_HAL_EOF.
  *   millis    import js_millis(): performance.now() desde o início
  *   sleep_ms  não dorme: registra o prazo e põe a VM em KSVM_YIELD; o
  *             worker retoma depois de setTimeout(prazo)
@@ -36,7 +37,12 @@ typedef struct ksweb_hal {
     bool     block;            /* getc sem dado suspende a VM */
     /* "Transação" da syscall de entrada em andamento (para desfazê-la). */
     bool     tx_valid;
-    uint32_t tx_pc, tx_count, tx_r1, tx_r2, tx_head;
+    uint32_t tx_pc, tx_count, tx_r1, tx_r2;
+    uint32_t tx_got;           /* bytes que getc já entregou nesta syscall */
+    /* Bytes que a syscall desfeita já tinha copiado para o guest em
+     * [replay_ptr, replay_ptr + replay_n): a repetição dela (mesmos pc,
+     * insn_count e r1) os relê de lá antes de voltar ao anel. */
+    uint32_t replay_pc, replay_count, replay_ptr, replay_n, replay_pos;
     bool     want_input;       /* a última syscall foi desfeita: falta entrada */
     uint32_t sleep_ms;         /* prazo pedido pelo último SLEEP_MS */
     bool     halted;
@@ -52,7 +58,7 @@ uint32_t ksweb_hal_feed(ksweb_hal *h, const uint8_t *src, uint32_t n);
 /* Espaço livre no anel. */
 uint32_t ksweb_hal_space(const ksweb_hal *h);
 
-/* Bytes à espera no anel. */
+/* Bytes à espera no anel (sem os que uma GETS desfeita vai reler do guest). */
 uint32_t ksweb_hal_pending(const ksweb_hal *h);
 
 /* Se a última syscall de entrada foi desfeita por falta de dado, restaura

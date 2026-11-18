@@ -28,6 +28,7 @@ const NATIVE = args.native || 'build/native';
 const KSVM = path.join(NATIVE, 'tools/ksvm');
 const KSDIS = path.join(NATIVE, 'tools/ksdis');
 const MKIMG = path.join(NATIVE, 'mkimg');
+const KSAS = path.join(NATIVE, 'ksas');
 const EXDIR = args.examples || 'build/examples';
 const WORK = path.resolve(args.work || 'build/test-tmp');
 
@@ -149,6 +150,13 @@ fs.writeFileSync(path.join(WORK, 'empty'), Buffer.alloc(0));
 const badMagic = Buffer.from(helloBytes);
 badMagic[0] = 0;
 fs.writeFileSync(path.join(WORK, 'badmagic.ksx'), badMagic);
+/* programas de regressão em test/progs/ */
+const PROG = {};
+for (const p of ['bigread', 'millis']) {
+  PROG[p] = path.join(WORK, p + '.ksx');
+  const r = spawnSync(KSAS, [path.join(__dirname, 'progs', p + '.ksasm'), '-o', PROG[p]]);
+  if (r.status !== 0) { console.log('ksas ' + p + ' falhou: ' + r.stderr); process.exit(1); }
+}
 
 /* ---- 1. exemplos (ksvm2/examples e ksweb/examples) ---- */
 const INPUTS = { ask_name: 'Isaque\n', maiusculas: 'abc\nKsvm 2\nfim sem newline' };
@@ -226,7 +234,8 @@ test('stdin-gets-linha-em-pedacos', () => {
   eq(s.tick().action, 'wait', 'espera a linha');
   s.pushInput(Buffer.from('Isa'));
   eq(s.tick().action, 'wait', 'linha incompleta: GETS repete (bloqueante)');
-  eq(core.inputPending(), 3, 'bytes devolvidos ao anel');
+  eq(core.inputPending(), 0, 'bytes consumidos (a repetição os relê do buffer do guest)');
+  eq(core.inputSpace(), 65536, 'não ocupam o anel');
   s.pushInput(Buffer.from('que\n'));
   const r = s.tick();
   eq(r.action, 'done', 'termina');
@@ -255,6 +264,35 @@ test('stdin-arquivo-grande-maior-que-o-anel', () => {
   const input = lines.join('\n') + '\n';
   ok(input.length > 65536, 'entrada maior que o anel de 64 KiB');
   compare('stdin-grande', path.join(EXDIR, 'maiusculas.ksx'), { input });
+});
+
+/* GETS com buffer maior que o anel e linha sem newline: os bytes que uma
+ * GETS desfeita já consumiu não podem ficar presos no anel (antes: o anel
+ * enchia, a GETS desfazia de novo e a VM esperava para sempre). */
+compare('stdin-gets-maior-que-o-anel', PROG.bigread, { input: Buffer.alloc(100000, 'x') });
+compare('stdin-gets-enche-o-buffer', PROG.bigread, { input: Buffer.alloc(250000, 'y') });
+
+test('stdin-gets-maior-que-o-anel-aos-pedacos', () => {
+  const input = Buffer.alloc(150000);
+  for (let i = 0; i < input.length; i++) input[i] = 0x41 + (i % 23);
+  const core = newCore();
+  const s = new KsSession(core, { slice: 1000 });
+  eq(s.load(fs.readFileSync(PROG.bigread)), null, 'load');
+  let waits = 0;
+  for (let off = 0; off < input.length; off += 7000) {
+    s.pushInput(input.subarray(off, off + 7000));
+    const r = s.tick();
+    eq(r.action, 'wait', 'pedaço em ' + off);
+    waits++;
+  }
+  s.eof();
+  let r;
+  for (let i = 0; i < 10 && (!r || r.action !== 'done'); i++) r = s.tick();
+  eq(r.action, 'done', 'termina no EOF');
+  const n = native(PROG.bigread, { input });
+  eq(r.info.code, n.rc, 'código (comprimento & 0xFF)');
+  ok(Buffer.from(core.takeOutput()).equals(n.stdout), 'eco idêntico ao nativo');
+  ok(waits > 10, 'esperou entre os pedaços');
 });
 
 test('stdin-eof-pegajoso', () => {

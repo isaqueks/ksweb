@@ -1,0 +1,23 @@
+; bigread.ksasm — um único GETS com buffer de 200000 bytes (maior que o anel
+; de entrada de 64 KiB do ksweb), ecoa o que leu e sai com o comprimento.
+; Regressão: sem newline na entrada, o GETS precisa juntar mais bytes do que
+; cabem no anel antes de terminar (no EOF ou ao encher o buffer).
+
+MAX = 200000
+
+        .text
+        .global _start
+_start:
+        la      r1, buf
+        li      r2, MAX
+        syscall GETS
+        mov     r16, r1
+        la      r1, buf
+        mov     r2, r16
+        syscall PUTS
+        mov     r1, r16
+        syscall EXIT
+
+        .bss
+buf:
+        .space  MAX

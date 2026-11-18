@@ -370,15 +370,19 @@
       this.flushInput();
     }
 
-    /* Move a fila para o anel do wasm até ele encher; EOF só depois da fila. */
+    /* Move a fila para o anel do wasm até ele encher; EOF só depois da fila.
+     * Devolve true se entregou algum byte ou o EOF. */
     flushInput() {
+      let moved = false;
       while (this.pending.length) {
         const b = this.pending[0];
         const n = this.core.feed(b);
-        if (n < b.length) { this.pending[0] = b.subarray(n); return; }
+        if (n > 0) moved = true;
+        if (n < b.length) { this.pending[0] = b.subarray(n); return moved; }
         this.pending.shift();
       }
-      if (this.eofPending) { this.core.inputEof(); this.eofPending = false; this.eofSent = true; }
+      if (this.eofPending) { this.core.inputEof(); this.eofPending = false; this.eofSent = true; moved = true; }
+      return moved;
     }
 
     hasInput() {
@@ -408,6 +412,9 @@
         case STATE.YIELD:
           return { action: 'sleep', state: st, ms: c.sleepMs() };
         case STATE.WAIT_INPUT:
+          /* A syscall esvaziou o anel e a fila ainda tem entrada (ou o EOF):
+           * entrega e continua, sem esperar por uma nova mensagem. */
+          if (this.flushInput()) return { action: 'continue', state: st };
           return { action: 'wait', state: st };
         case STATE.BREAK:
           return { action: 'break', state: st, reason: STOP_NAME[c.stopReason()] || '?' };
@@ -439,8 +446,9 @@
         r = this.tick(false);
         if (r.action === 'wait') {
           stats.waits++;
-          if (!this.eofSent) this.eof();
-          else throw new Error('WAIT_INPUT depois de EOF');
+          if (this.eofSent) throw new Error('WAIT_INPUT depois de EOF');
+          if (this.eofPending) throw new Error('WAIT_INPUT com a entrada presa na fila (anel cheio)');
+          this.eof();
         } else if (r.action === 'sleep') {
           stats.sleeps.push(r.ms);
         } else if (r.action === 'break') {
