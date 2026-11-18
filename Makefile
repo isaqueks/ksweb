@@ -42,7 +42,8 @@ WASM     = $(BUILD)/ksvm.wasm
 KSAS   = $(NATIVE)/ksas
 KSVM   = $(NATIVE)/tools/ksvm
 KSDIS  = $(NATIVE)/tools/ksdis
-NATIVE_DEPS = $(wildcard $(K)/src/core/*.c $(K)/src/hal/*.c $(K)/src/tools/*.c \n                          $(K)/src/tools/*/*.c $(K)/include/ksvm/*.h)
+NATIVE_DEPS = $(wildcard $(K)/src/core/*.c $(K)/src/hal/*.c $(K)/src/tools/*.c \
+                          $(K)/src/tools/*/*.c $(K)/include/ksvm/*.h)
 MKIMG  = $(NATIVE)/mkimg
 
 EX_KSVM2 = $(wildcard $(K)/examples/*.ksasm $(K)/examples/v1_ported/*.ksasm)
