@@ -435,6 +435,18 @@ test('il-dl-cancelam-wrap-pendente', () => {
     eq(s.cell(0, 1).c, 'X', f + ': X na coluna 0, sem quebrar a linha');
   }
 });
+test('sgr-cor-invalida-ou-incompleta-ignorada', () => {
+  const s = vt(10, 2);
+  s.write(E + '[38;5;3m');
+  for (const seq of ['38;5', '38;5;256', '38;2;1;2', '38;2;300;0;0', '38:5:256', '38:5']) {
+    s.write(E + '[' + seq + 'm');
+    eq(s.fg, 3, 'ESC[' + seq + 'm mantém a cor');
+  }
+  s.write(E + '[48;5;999;1m');
+  eq([s.bg, !!(s.fl & ATTR.BOLD)], [-1, true], '256 inválido consome os parâmetros e segue');
+  s.write(E + '[38;2;10;20;30;4m');
+  eq([s.fg, !!(s.fl & ATTR.UNDERLINE)], [VtScreen.RGB | 0x0A141E, true], 'truecolor válido');
+});
 
 /* ---- resize ---- */
 test('resize', () => {

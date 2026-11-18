@@ -25,6 +25,8 @@
     WIDE: 256, WIDE_CONT: 512
   });
   const RGB = 0x1000000;
+  const byteOk = (v) => Number.isInteger(v) && v >= 0 && v <= 255;
+  const rgbColor = (v) => (v.length === 3 && v.every(byteOk) ? RGB | (v[0] << 16) | (v[1] << 8) | v[2] : null);
 
   /* DEC special graphics: 0x5F..0x7E -> desenho de linhas e símbolos. */
   const DEC_GRAPHICS = {
@@ -742,23 +744,19 @@
         const sub = raw[i].split(':').map((s) => (s === '' ? -1 : parseInt(s, 10)));
         const n = isNaN(sub[0]) || sub[0] < 0 ? 0 : sub[0];
         if (n === 38 || n === 48 || n === 58) {
+          /* Índice > 255, componente > 255 ou parâmetros faltando: a cor é
+           * ignorada (como no xterm), mas os parâmetros são consumidos. */
           let color = null;
           if (sub.length > 1) {                       /* forma com ':' */
-            if (sub[1] === 5) color = sub[2] >= 0 ? sub[2] & 255 : null;
-            else if (sub[1] === 2) {
-              const v = sub.length >= 6 ? sub.slice(3, 6) : sub.slice(2, 5);
-              color = RGB | ((v[0] & 255) << 16) | ((v[1] & 255) << 8) | (v[2] & 255);
-            }
+            if (sub[1] === 5) color = byteOk(sub[2]) ? sub[2] : null;
+            else if (sub[1] === 2) color = rgbColor((sub.length >= 6 ? sub.slice(3, 6) : sub.slice(2, 5)).map((x) => (x === -1 ? 0 : x)));
           } else {
             const mode = parseInt(raw[i + 1], 10);
-            if (mode === 5) { color = parseInt(raw[i + 2], 10) & 255; i += 2; }
-            else if (mode === 2) {
-              const r = parseInt(raw[i + 2], 10) & 255, g = parseInt(raw[i + 3], 10) & 255, b = parseInt(raw[i + 4], 10) & 255;
-              color = RGB | (r << 16) | (g << 8) | b;
-              i += 4;
-            } else { i += 1; }
+            if (mode === 5) { const v = parseInt(raw[i + 2], 10); color = byteOk(v) ? v : null; i += 2; }
+            else if (mode === 2) { color = rgbColor([raw[i + 2], raw[i + 3], raw[i + 4]].map((x) => parseInt(x, 10))); i += 4; }
+            else { i += 1; }
           }
-          if (color !== null && !isNaN(color)) {
+          if (color !== null) {
             if (n === 38) this.fg = color; else if (n === 48) this.bg = color;
           }
           continue;
