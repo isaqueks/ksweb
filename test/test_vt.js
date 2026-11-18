@@ -485,6 +485,17 @@ test('escrita-fora-de-banda-no-meio-de-sequencia', () => {
   eq(!!(s.cell(12, 2).fl & ATTR.BOLD), true, 'SGR aplicado');
 });
 
+test('decstbm-fundo-alem-da-tela-vale-a-ultima-linha', () => {
+  /* xterm: margem de baixo 0, omitida ou maior que a tela = última linha;
+   * topo >= fundo continua ignorado. */
+  const s = vt(5, 10);
+  s.write(E + '[3;5r' + E + '[4;2H' + E + '[2;99r');
+  eq([s.top, s.bottom], [1, 9], 'fundo 99 limitado à tela');
+  eq(cur(s), [0, 0], 'e o cursor vai ao início');
+  s.write(E + '[4;4r' + E + '[5;5H' + E + '[11;20r');
+  eq([s.top, s.bottom, s.y], [1, 9, 4], 'topo >= fundo: ignorado');
+});
+
 /* ---- resize ---- */
 test('resize', () => {
   const s = vt(10, 4);

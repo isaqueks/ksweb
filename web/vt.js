@@ -685,7 +685,7 @@
           break;
         case 'c': if ((p[0] || 0) === 0) this._respond('\x1b[?1;2c'); break;
         case 'r': {
-          const t = p0(0, 1) - 1, b = p0(1, this.rows) - 1;
+          const t = p0(0, 1) - 1, b = Math.min(p0(1, this.rows), this.rows) - 1;   /* xterm limita o fundo */
           if (t < b && b < this.rows) {
             this.top = t; this.bottom = b;
             this._moveTo(0, this.originMode ? this.top : 0);
