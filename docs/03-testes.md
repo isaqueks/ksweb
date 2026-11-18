@@ -6,11 +6,12 @@ pelo Makefile da ksvm2.
 
 | Script | Casos | O que cobre |
 |--------|------:|-------------|
-| `test/run_node.js` | 89 | wasm × `ksvm` nativo e a API do ksweb |
-| `test/test_vt.js` | 52 | emulador VT puro (`web/vt.js`) |
+| `test/run_node.js` | 97 | wasm × `ksvm` nativo e a API do ksweb |
+| `test/test_vt.js` | 59 | emulador VT puro (`web/vt.js`) |
 | `test/test_format.js` | 10 | formatadores do depurador (`web/format.js`) |
 | `test/test_lineedit.js` | 8 | teclado → bytes e editor de linha (`web/input.js`) com eco pelo VT |
-| `test/check_dist.js` | 10 | `dist/`, `ksweb-single.html` e `worker.js` pelo protocolo de mensagens |
+| `test/test_terminal.js` | 5 | `TerminalView` (`web/terminal.js`) num DOM falso: teclado, mensagens do runner, HTML escapado |
+| `test/check_dist.js` | 16 | `dist/`, `ksweb-single.html` e `worker.js` pelo protocolo de mensagens |
 | `test/browser_smoke.js` | opcional | página num Chrome/Edge headless (`make test-browser`) |
 
 ## `run_node.js`
@@ -45,6 +46,13 @@ entrada e opções:
   bytes (`test/progs/bigread.ksasm`) com 100000 e 250000 bytes sem `\n`, e
   com a entrada chegando em pedaços de 7000; EOF imediato.
 - **SLEEP_MS/YIELD**: o `vtdemo` cede 40 vezes com prazo de 25 ms.
+- **MILLIS** (`test/progs/millis.ksasm`): recomeça perto de 0 a cada carga
+  no mesmo `KsCore` ("desde o boot").
+- **Trace com BRK em laço** (`test/progs/brkloop.ksasm`, 20 BRKs): idêntico
+  ao `--trace` nativo, cada BRK com o dump de registradores, também num anel
+  de 25 registros.
+- **Cabeçalho** com `ram_base` desalinhado: `sp0` = sp do núcleo, e a
+  execução comparada com o nativo.
 - **Limite** exato de instruções com fatias menores que o limite.
 - **`ksweb_step` + disasm × `ksdis`**: para cada exemplo, 400 passos; em
   cada pc o texto de `ksweb_disasm_at` tem de ser o da listagem do `ksdis`
@@ -84,7 +92,11 @@ de título com BEL e ST, OSC/DCS/PM/APC desconhecidos consumidos,
 sequências desconhecidas sem lixo na tela, controle dentro de CSI,
 parâmetros enormes, UTF-8 partido byte a byte, UTF-8 inválido, largura
 dupla (CJK, emoji, quebra na última coluna, sobrescrita de metade),
-combinantes, redimensionamento e linhas sujas. O último caso roda o
+combinantes, redimensionamento e linhas sujas. Regressões da revisão: CUU/CUD
+vindo de fora da região param na margem, IL/DL cancelam o wrap pendente,
+SGR 38/48 inválido ou incompleto é ignorado, ESC aborta DCS/APC sem ST,
+ECH/DCH ao lado de caractere largo, DECSTBM com fundo além da tela, e a
+escrita fora de banda (`outOfBand`) no meio de OSC/CSI do guest. O último caso roda o
 `vtdemo` no wasm e confere a caixa, a barra (truecolor) e o texto final.
 
 ## `check_dist.js`
@@ -100,7 +112,18 @@ combinantes, redimensionamento e linhas sujas. O último caso roda o
    falso e é dirigido pelas mensagens do protocolo: `init`, `load`, `run`,
    saída, `waiting` → `input` → `eof`, depurador com breakpoint (`break`,
    `snapshot` com a janela de disassembly e o trace), `mem`, `step`
-   (`stepped`) e `trace-export` no formato do `--trace`.
+   (`stepped`) e `trace-export` no formato do `--trace`; mensagens mandadas
+   antes do `ready` (atendidas depois dele, sem exceção), `run` repetido com
+   a VM andando (não encurta o prazo do `SLEEP_MS`) e poll ligado com a VM
+   esperando entrada (retoma).
+
+## `test_terminal.js`
+
+`terminal.js` carregado num contexto `vm` com um DOM falso mínimo: no modo
+raw F8/F10/Ctrl+F9 ficam com a página e as demais teclas vão ao guest;
+Ctrl+Alt+C/Pause interrompem; modo linha com Enter e Ctrl+D; `writeSystem`
+com um OSC do guest aberto; a saída `<img ...>` do guest vira texto
+escapado no HTML da linha.
 
 ## `browser_smoke.js` (opcional)
 

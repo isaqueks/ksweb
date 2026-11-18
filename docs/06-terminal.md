@@ -9,7 +9,8 @@ testado em `test/test_vt.js`), e desenhada por `web/terminal.js`.
 - **Parser**: máquina de estados no estilo de vt100.net (Paul Williams):
   GROUND, ESC, ESC intermediário, CSI (parâmetros, intermediários,
   ignorar), OSC e strings DCS/SOS/PM/APC. CAN/SUB abortam qualquer
-  sequência; ESC no meio de uma recomeça; controles C0 dentro de CSI são
+  sequência; ESC no meio de uma recomeça (inclusive dentro de OSC e de
+  DCS/SOS/PM/APC sem terminador; `ESC \` é o ST); controles C0 dentro de CSI são
   executados. Sequências desconhecidas são consumidas inteiras sem
   aparecer na tela. OSC é limitado a 4096 caracteres; parâmetros, a 65535.
 - **Tela**: linhas de células `{c, fg, bg, fl}`; cursor com "wrap
@@ -60,11 +61,14 @@ DEC special graphics: `` ` `` ◆, `a` ▒, `f` °, `g` ±, `j` ┘, `k` ┐, `l
 | `S` `T` | SU SD | `b` | REP (repete o último caractere, já mapeado) |
 | `I` `Z` | CHT CBT | `g` 0 3 | TBC |
 | `m` | SGR (abaixo) | `n` 5 / 6 | DSR: responde `ESC[0n` / `ESC[linha;colunaR` no stdin |
-| `c` | DA: responde `ESC[?1;2c` | `r` | DECSTBM: região de rolagem; leva o cursor ao início |
+| `c` | DA: responde `ESC[?1;2c` | `r` | DECSTBM: região de rolagem (fundo além da tela = última linha; topo >= fundo é ignorado); leva o cursor ao início |
 | `s` `u` | SCP RCP | `h` `l` 4 / 20 | IRM (inserção) / LNM |
 | `! p` | DECSTR (reset suave) | outros | consumidos |
 
-CUU/CUD param nas margens da região quando o cursor está dentro dela. IND/LF
+CUU/CPL param na margem de cima da região e CUD/CNL na de baixo, a menos que
+o cursor já comece além dessa margem (como `CursorUp/CursorDown` do xterm:
+de baixo da região, CUU para na margem de cima). IL/DL e os movimentos do
+cursor cancelam o wrap pendente. IND/LF
 no fundo da região e RI no topo dela rolam só a região; só a rolagem com a
 região começando na linha 1 da tela principal alimenta o histórico. Apagar
 usa a cor de fundo atual (BCE, como o xterm).
@@ -76,7 +80,9 @@ riscado; 21 sublinhado; 22 sem negrito/fraco; 23 24 25 27 28 29 desligam
 itálico, sublinhado, piscante, inverso, oculto, riscado; 30–37 / 40–47 e
 90–97 / 100–107 (16 cores do tema); 38;5;n / 48;5;n (256 cores); 38;2;r;g;b /
 48;2;r;g;b (truecolor); as formas com dois-pontos (`38:5:n`,
-`38:2::r:g:b`); 39 / 49 cor padrão.
+`38:2::r:g:b`); 39 / 49 cor padrão. Índice acima de 255, componente acima de
+255 ou parâmetros faltando (`38;5`, `38;2;1;2`): a cor é ignorada e os
+parâmetros são consumidos, como no xterm.
 
 ### Modos privados (`CSI ? n h/l`)
 `1` DECCKM (setas em SS3), `6` DECOM, `7` autowrap, `25` cursor visível,
@@ -110,12 +116,13 @@ linha completa e deixa o resto para editar.
 | Home / End | `ESC[H` / `ESC[F` |
 | Insert / Delete / PgUp / PgDn | `ESC[2~` `ESC[3~` `ESC[5~` `ESC[6~` |
 | F1–F4 | `ESC O P` … `ESC O S` |
-| F5–F12 | `ESC[15~` `17~` `18~` `19~` `20~` `21~` `23~` `24~` |
+| F5–F12 | `ESC[15~` `17~` `18~` `19~` `20~` `21~` `23~` `24~` (F8, F10 e Ctrl+F9 ficam com a página) |
 | com Shift/Alt/Ctrl | parâmetro xterm: `ESC[1;5C` (Ctrl+→), `ESC[3;2~` (Shift+Del) |
-| Ctrl+letra | código de controle (Ctrl+C = 0x03, Ctrl+D = 0x04...), Ctrl+Espaço = 0x00, Ctrl+[ \ ] ^ _ |
+| Ctrl+letra | código de controle (Ctrl+C = 0x03, Ctrl+D = 0x04...), Ctrl+Espaço = 0x00, Ctrl+[ \ ] ^ _; Ctrl + caractere não ASCII não gera nada |
 | Alt+tecla | `ESC` + tecla |
 
-Atalhos da página (não vão ao guest): Ctrl+Alt+C ou Pause interrompe a VM;
+Atalhos da página (não vão ao guest, em nenhum dos modos; `pageShortcut`
+em `input.js`): Ctrl+Alt+C ou Pause interrompe a VM;
 Ctrl+C com texto selecionado copia; Ctrl+V/Cmd+V cola; Shift+PgUp/PgDn rola
 o histórico; F8 executar/parar; F10 passo; Ctrl+F9 depurador.
 
@@ -130,7 +137,9 @@ os mesmos atributos são agrupadas num `<span>`; as 16 cores vêm de
 variáveis CSS do tema (claro/escuro), as de 256 cores e truecolor vão
 inline. A seleção com o mouse copia texto puro (espaços finais das linhas
 são omitidos). Mensagens do ksweb (`[ksweb] ...`) usam um atributo próprio,
-fora da paleta do guest.
+fora da paleta do guest, e são escritas fora de banda (`VtScreen.outOfBand`):
+uma sequência que o guest deixou aberta (OSC sem terminador, CSI partido)
+não as engole e continua depois delas.
 
 Limitações: sem IME/composição nem teclado virtual de celular; ao
 redimensionar o texto não é refluído; a largura das células largas depende

@@ -57,7 +57,7 @@ Requer clang com alvo wasm32, wasm-ld, GNU make, gcc (oráculo nativo) e Node
 | Alvo | O que faz |
 |------|-----------|
 | `make` | `build/ksvm.wasm`, ferramentas nativas da ksvm2 em `build/native/` e exemplos `.ksx` |
-| `make test` | testes em Node: wasm × `ksvm` nativo, terminal VT, editor de linha, formatadores, `dist/` e worker |
+| `make test` | testes em Node: wasm × `ksvm` nativo, terminal VT, editor de linha, terminal no DOM falso, formatadores, `dist/` e worker |
 | `make dist` | `dist/` (site estático) e `dist/ksweb-single.html` |
 | `make serve` | `python3 -m http.server` em `dist/` (`PORT=8000`) |
 | `make test-browser` | fumaça num Chrome/Edge headless (opcional; Node 22+) |
@@ -78,7 +78,8 @@ web/            index.html, style.css, ksweb.js (controlador), worker.js,
 examples/       vtdemo.ksasm, maiusculas.ksasm e menu.json (exemplos do menu)
 tools/          mkexamples.js (examples.js com base64), mksingle.js (arquivo único)
 test/           run_node.js, test_vt.js, test_format.js, test_lineedit.js,
-                check_dist.js, browser_smoke.js
+                test_terminal.js, check_dist.js, browser_smoke.js;
+                progs/*.ksasm (programas de regressão)
 docs/           README e 01..06 (arquitetura, API, testes, roadmap, depurador, terminal)
 ```
 

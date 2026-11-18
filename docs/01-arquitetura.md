@@ -35,7 +35,9 @@
   com `memory.grow`; `ksweb_init` esvazia a arena, então reiniciar não vaza.
   RAM de 1 byte a 64 MiB (`KSWEB_MAX_RAM`); a página oferece 64 KiB a 64 MiB.
   A região CODE aponta para dentro do buffer da imagem (sem cópia), como no
-  runner nativo. O anel de trace (65536 × 16 B) e o anel de entrada (64 KiB)
+  runner nativo. O anel de trace (65536 × 16 B), os retratos de
+  registradores dos BRKs (32769 × 144 B, um por BRK que cabe no anel) e o
+  anel de entrada (64 KiB)
   são estáticos (`.bss`, não ocupam o arquivo).
 - **Tamanho**: `ksvm.wasm` tem ~47 KB (o núcleo inteiro, soft-float e
   disassembler inclusos).

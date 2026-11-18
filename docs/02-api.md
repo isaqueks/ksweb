@@ -44,7 +44,7 @@ IMAGE_RANGE, `-9` IMAGE_ENTRY, `-10` NO_RAM, ...) e `KSWEB_E_NOMEM = -100`
 |--------|-----------|
 | `ksweb_init(ram_size, stack_size) → int` | VM nova com `ram_size` bytes de RAM zerada (1..64 MiB). `stack_size != 0` substitui o `stack_size` da imagem, como `ksvm --stack`. Esvazia a arena: ponteiros anteriores de `ksweb_alloc` deixam de valer. Mantém breakpoints, opções de parada e a capacidade do trace. `0`, `KSVM_E_ARG` ou `KSWEB_E_NOMEM`. |
 | `ksweb_alloc(n) → ptr` | `n` bytes na arena (alinhados a 16), para o JS copiar a imagem; 0 se não couber. |
-| `ksweb_load(ptr, len) → int` | valida e carrega a imagem `.ksx` em `[ptr, ptr+len)` (doc 05 da KSVM). Devolve 0 ou o erro do loader. O buffer precisa viver enquanto a VM rodar (CODE aponta para ele). |
+| `ksweb_load(ptr, len) → int` | valida e carrega a imagem `.ksx` em `[ptr, ptr+len)` (doc 05 da KSVM). Devolve 0 ou o erro do loader. O buffer precisa viver enquanto a VM rodar (CODE aponta para ele). Uma carga por `ksweb_init`: um segundo `ksweb_load` devolve `KSVM_E_OVERLAP` (CODE e RAM já estão no barramento) e deixa a VM descarregada (`NOT_LOADED`). |
 | `ksweb_version() → u32` | `major<<16 | minor<<8 | patch` (como a syscall VERSION). |
 
 ### Execução
@@ -70,7 +70,7 @@ IMAGE_RANGE, `-9` IMAGE_ENTRY, `-10` NO_RAM, ...) e `KSWEB_E_NOMEM = -100`
 | `ksweb_feed(len) → u32` | copia `len` bytes da área para o anel (64 KiB); devolve quantos couberam. |
 | `ksweb_feed_input(byte) → u32` | um byte; 1 se coube. |
 | `ksweb_input_eof()` | fim da entrada (depois de esvaziar o anel, GETC/GETS veem EOF). |
-| `ksweb_input_space() → u32` / `ksweb_input_pending() → u32` | espaço livre / bytes à espera no anel. |
+| `ksweb_input_space() → u32` / `ksweb_input_pending() → u32` | espaço livre / bytes à espera no anel (os que uma `GETS` desfeita já copiou para o guest saíram do anel; a repetição os relê do buffer dela, 01-arquitetura §3). |
 | `ksweb_wants_input() → u32` | 1 entre o desfazer de uma syscall e o retorno de `ksweb_run` (uso interno; o estado `WAIT_INPUT` já diz isso). |
 | `ksweb_set_stdin_block(on)` | 1 = suspende sem dado (padrão); 0 = poll (GETC devolve -1/AGAIN). |
 
@@ -142,7 +142,8 @@ Uma execução com a convenção do runner nativo: `new KsSession(core,
 {code, kind: 'load', message}`, `pushInput(bytes)` (fila; entrega ao anel
 conforme houver espaço), `eof()` (depois da fila), `tick(step?) → {action,
 ...}` com `action` em `continue | sleep (ms) | wait | break (reason) | done
-(info)`, e `runSync(input)` para testes (entrada inteira + EOF, YIELD sem
+(info)` (em `WAIT_INPUT` com entrada ainda na fila, entrega e devolve
+`continue`), e `runSync(input)` para testes (entrada inteira + EOF, YIELD sem
 espera real).
 
 Outros: `parseSymbols(image, symOff, symSize) → [{addr, kind, name}]`,
