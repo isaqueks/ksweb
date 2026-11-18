@@ -1,0 +1,113 @@
+; vtdemo.ksasm — demonstração do terminal VT do ksweb: limpa a tela, esconde
+; o cursor, desenha uma caixa com o conjunto DEC special graphics (ESC ( 0:
+; l q k x t u m j viram cantos e linhas), escreve um título em negrito e
+; amarelo, anima uma barra de progresso posicionando o cursor (CUP) e
+; pintando cada célula com fundo truecolor (SGR 48;2;r;g;b), com SLEEP_MS
+; entre os quadros, e termina mostrando os atributos SGR mais comuns.
+;
+; Em um terminal sem VT100 (ou no ksvm nativo com a saída num arquivo) o
+; resultado são as próprias sequências de escape.
+
+ESC = 0x1B
+W   = 40                        ; largura interna da caixa (colunas 5..44)
+
+        .text
+        .global _start
+_start:
+        la      r1, s_init
+        call    puts_z
+        la      r1, s_box
+        call    puts_z
+        clr     r16                 ; i = célula atual
+frame:
+        la      r1, s_csi           ; ESC [ 5 ; (5 + i) H
+        call    puts_z
+        addi    r1, r16, 5
+        call    put_dec
+        li      r1, 'H'
+        syscall PUTC
+        la      r1, s_bg            ; ESC [ 48;2; (255 - 6i) ; (6i) ;80m
+        call    puts_z
+        muli    r17, r16, 6
+        li      r1, 255
+        sub     r1, r1, r17
+        call    put_dec
+        li      r1, ';'
+        syscall PUTC
+        mov     r1, r17
+        call    put_dec
+        la      r1, s_bg_end
+        call    puts_z
+        la      r1, s_pct_pos       ; porcentagem = (i + 1) * 100 / W
+        call    puts_z
+        addi    r1, r16, 1
+        muli    r1, r1, 100
+        li      r5, W
+        divu    r1, r1, r5
+        call    put_dec
+        la      r1, s_pct
+        call    puts_z
+        li      r1, 25
+        syscall SLEEP_MS
+        inc     r16
+        cmpi    r16, W
+        blo     frame
+        la      r1, s_end
+        call    puts_z
+        li      r1, 0
+        halt
+
+; puts_z(r1 = string terminada em 0). Usa r1, r2, r5, r6.
+puts_z:
+        mov     r5, r1
+pz_len:
+        ldb     r6, [r5]
+        cmpi    r6, 0
+        beq     pz_out
+        inc     r5
+        b       pz_len
+pz_out:
+        sub     r2, r5, r1
+        syscall PUTS
+        ret
+
+; put_dec(r1 = valor sem sinal). Usa r1, r2, r5..r7.
+put_dec:
+        subi    sp, sp, 12
+        addi    r5, sp, 12
+        li      r6, 10
+pd_digit:
+        remu    r7, r1, r6
+        addi    r7, r7, '0'
+        dec     r5
+        stb     [r5], r7
+        divu    r1, r1, r6
+        cmpi    r1, 0
+        bne     pd_digit
+        addi    r2, sp, 12
+        sub     r2, r2, r5
+        mov     r1, r5
+        syscall PUTS
+        addi    sp, sp, 12
+        ret
+
+        .rodata
+s_init: .asciz  "\x1b[?25l\x1b[2J\x1b[H"
+s_box:  .ascii  "\x1b[2;4H\x1b(0l"
+        .space  W, 'q'
+        .ascii  "k\x1b[3;4Hx\x1b(B\x1b[1;33m  ksweb: terminal VT100 + DEC graphics\x1b[0m"
+        .ascii  "\x1b[3;45H\x1b(0x\x1b[4;4Ht"
+        .space  W, 'q'
+        .ascii  "u\x1b[5;4Hx\x1b[5;45Hx\x1b[6;4Hm"
+        .space  W, 'q'
+        .ascii  "j\x1b(B"
+        .ascii  "\x1b[8;4H\x1b[1mnegrito\x1b[0m \x1b[2mfraco\x1b[0m \x1b[3mitalico\x1b[0m "
+        .ascii  "\x1b[4msublinhado\x1b[0m \x1b[7minverso\x1b[0m \x1b[9mriscado\x1b[0m"
+        .ascii  "\x1b[9;4H\x1b[31mverm \x1b[32mverde \x1b[34mazul \x1b[95mmagenta+ "
+        .asciz  "\x1b[38;5;208mlaranja(256)\x1b[0m"
+s_csi:  .asciz  "\x1b[5;"
+s_bg:   .asciz  "\x1b[48;2;"
+s_bg_end: .asciz ";80m \x1b[0m"
+s_pct_pos: .asciz "\x1b[7;4Hprogresso: "
+s_pct:  .asciz  "%  "
+s_end:  .asciz  "\x1b[11;4H\x1b[1;32mpronto!\x1b[0m\x1b[?25h\n"

@@ -1,0 +1,93 @@
+; maiusculas.ksasm — lê linhas da entrada padrão (GETS) e as devolve em
+; maiúsculas até o fim da entrada (Ctrl+D no ksweb); no fim informa
+; quantas linhas leu e sai com esse número como código de saída.
+;
+; Exemplo (entrada "abc\nKsvm 2\n"):
+;   > ABC
+;   > KSVM 2
+;   > 2 linhas
+;
+; No ksweb a syscall GETS sem dado suspende a VM até chegar uma linha do
+; terminal (em vez de o programa girar a CPU). Se a VM estiver no modo
+; "poll" (stdin não bloqueante), GETS devolve 0 e o programa cede a vez com
+; YIELD antes de tentar de novo.
+
+BUF = 80
+
+        .text
+        .global _start
+_start:
+        clr     r16                 ; linhas lidas
+prompt:
+        la      r1, s_prompt
+        li      r2, 2
+        syscall PUTS
+again:
+        la      r1, buf
+        li      r2, BUF
+        syscall GETS
+        cmpi    r1, -1
+        beq     done                ; EOF
+        cmpi    r1, 0
+        bne     got
+        syscall YIELD               ; modo poll: nada ainda
+        b       again
+got:
+        mov     r17, r1             ; comprimento
+        la      r5, buf
+        add     r6, r5, r17
+up_loop:
+        cmp     r5, r6
+        beq     up_done
+        ldb     r7, [r5]
+        cmpi    r7, 'a'
+        blo     up_next
+        cmpi    r7, 'z'
+        bhi     up_next
+        subi    r7, r7, 32
+        stb     [r5], r7
+up_next:
+        inc     r5
+        b       up_loop
+up_done:
+        la      r1, buf
+        mov     r2, r17
+        syscall PUTS
+        inc     r16
+        b       prompt
+done:
+        mov     r1, r16
+        call    put_dec
+        la      r1, s_lines
+        li      r2, s_lines_len
+        syscall PUTS
+        mov     r1, r16
+        halt
+
+; put_dec(r1 = valor sem sinal). Usa r1, r2, r5..r7.
+put_dec:
+        subi    sp, sp, 12
+        addi    r5, sp, 12
+        li      r6, 10
+pd_digit:
+        remu    r7, r1, r6
+        addi    r7, r7, '0'
+        dec     r5
+        stb     [r5], r7
+        divu    r1, r1, r6
+        cmpi    r1, 0
+        bne     pd_digit
+        addi    r2, sp, 12
+        sub     r2, r2, r5
+        mov     r1, r5
+        syscall PUTS
+        addi    sp, sp, 12
+        ret
+
+        .rodata
+s_prompt: .ascii "> "
+s_lines:  .ascii " linhas\n"
+s_lines_len = . - s_lines
+
+        .bss
+buf:    .space  BUF

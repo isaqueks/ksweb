@@ -1,0 +1,13 @@
+[
+  { "name": "hello",      "title": "Hello (PUTS)" },
+  { "name": "vtdemo",     "title": "Demo VT100: caixa DEC, cores, cursor" },
+  { "name": "float",      "title": "Extensão F (ponto flutuante)" },
+  { "name": "maiusculas", "title": "Maiúsculas (lê stdin até EOF)", "stdin": true },
+  { "name": "ask_name",   "title": "Pergunta o nome (GETS)", "stdin": true },
+  { "name": "fib",        "title": "Fibonacci" },
+  { "name": "sieve",      "title": "Crivo de Eratóstenes" },
+  { "name": "recursion",  "title": "Recursão (fatorial, fib)" },
+  { "name": "bitops",     "title": "Operações de bits" },
+  { "name": "jumptable",  "title": "Tabela de saltos (JMPR)" },
+  { "name": "strlen",     "title": "strlen sobre tabela de ponteiros" }
+]
