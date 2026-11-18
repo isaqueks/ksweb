@@ -260,7 +260,15 @@ function dispatch(m) {
       break;
     case 'config':
       if (m.slice && session) session.opts.slice = m.slice;
-      if (m.stdinBlock !== undefined && session) { session.opts.stdinBlock = m.stdinBlock; core.setStdinBlock(m.stdinBlock); }
+      if (m.stdinBlock !== undefined && session) {
+        session.opts.stdinBlock = m.stdinBlock;
+        core.setStdinBlock(m.stdinBlock);
+        if (!m.stdinBlock && waiting) {                 /* em poll a syscall não espera mais */
+          waiting = false;
+          status(running ? 'running' : 'paused');
+          if (running) schedule(0);
+        }
+      }
       if (m.budgetMs) budgetMs = m.budgetMs;
       break;
     case 'debug':

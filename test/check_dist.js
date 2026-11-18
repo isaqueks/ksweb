@@ -217,6 +217,25 @@ for (const [label, src] of workerSources()) {
     await w.send({ type: 'pause' });
   });
 
+  test('worker-' + label + '-poll-durante-espera-retoma', async () => {
+    /* Ligar "stdin não bloqueante" com a VM suspensa em GETS: a syscall
+     * tem de ser repetida já em modo poll (devolve 0, o programa cede). */
+    const w = await workerHarness(src);
+    await w.send({ type: 'init', wasm: new Uint8Array(wasmFile).buffer });
+    await w.until((m) => m.type === 'ready');
+    await w.send({ type: 'load', image: exImage('maiusculas'), opts: {} });
+    await w.until((m) => m.type === 'loaded');
+    await w.send({ type: 'run' });
+    await w.until((m) => m.type === 'status' && m.state === 'waiting');
+    await w.send({ type: 'config', stdinBlock: false });
+    await w.until((m) => m.type === 'status' && m.state === 'sleeping', 2000);
+    await w.send({ type: 'input', bytes: new TextEncoder().encode('ok\n').buffer });
+    await w.send({ type: 'eof' });
+    const st = await w.until((m) => m.type === 'status' && m.state === 'done');
+    eq(st.info.code, 1);
+    eq(w.outputs(), '> OK\n> 1 linhas\n');
+  });
+
   test('worker-' + label + '-depurador', async () => {
     const w = await workerHarness(src);
     await w.send({ type: 'init', wasm: new Uint8Array(wasmFile).buffer });
