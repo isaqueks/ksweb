@@ -11,7 +11,7 @@ copiar dados e ler strings.
 | Import | Assinatura | Uso |
 |--------|------------|-----|
 | `js_putc` | `(c: u32) → void` | um byte de saída do guest (PUTC/PUTS/stderr da libks) |
-| `js_millis` | `() → u32` | ms desde a criação da instância (`performance.now()`), syscall `MILLIS` |
+| `js_millis` | `() → u32` | ms desde o último `KsCore.init` (o "boot" da VM; `performance.now()`), syscall `MILLIS` |
 | `js_micros` | `() → u32` | µs, syscall `MICROS` (0x22) |
 
 ## 2. Estados e códigos

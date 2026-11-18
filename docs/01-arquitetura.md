@@ -46,7 +46,7 @@
 |--------|---------------|
 | `putc` | import `js_putc(c)`; `vmcore.js` acumula os bytes e o worker os envia à página uma vez por rodada |
 | `getc` | lê do anel alimentado por `ksweb_feed`/`ksweb_feed_input`; sem dado, ver §3 |
-| `millis` | import `js_millis()` = `performance.now()` desde a criação da instância |
+| `millis` | import `js_millis()` = `performance.now()` desde o boot da VM (`KsCore.init`, a cada carga), como o `hal_posix` |
 | `sleep_ms` | não dorme: guarda o prazo e põe a VM em `KSVM_YIELD`; o worker retoma depois de `setTimeout(prazo)` |
 | `syscall` | `MICROS` (0x22) por `js_micros()`; grupo 3 (arquivos), GPIO e números de usuário: `KSVM_SYS_UNKNOWN` (`r2 = ENOSYS`) |
 | `on_halt` | registra o código de saída |

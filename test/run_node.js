@@ -513,6 +513,21 @@ test('mem-read-regioes-cabecalho', () => {
   eq(top.readable, 16, 'topo do espaço ilegível; a leitura dá a volta para 0 (CODE)');
 });
 
+test('millis-desde-o-boot-de-cada-carga', () => {
+  /* MILLIS = "ms desde o boot" (doc 06 da ksvm2; hal_posix conta do init):
+   * recarregar a imagem no mesmo KsCore recomeça do zero. */
+  let t = 1000;
+  const core = KsCore.createSync(WASM, { clock: () => t });
+  for (const [dt, what] of [[0, 'primeira carga'], [5007, 'depois de 5 s'], [123456, 'outra']]) {
+    t += dt;
+    const s = new KsSession(core, {});
+    eq(s.load(fs.readFileSync(PROG.millis)), null, 'load');
+    t += 3;
+    eq(s.runSync('').info.rawCode, 3, 'MILLIS logo após o boot (' + what + ')');
+  }
+  eq(native(PROG.millis).rc < 50, true, 'nativo também começa perto de 0');
+});
+
 test('cpu-snapshot-e-registradores', () => {
   const core = newCore();
   const s = new KsSession(core, {});

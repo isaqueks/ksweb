@@ -117,8 +117,10 @@
 
     /* ---- ciclo de vida ---- */
 
+    /* VM nova: MILLIS/MICROS contam a partir daqui ("desde o boot"). */
     init(ramSize, stackSize) {
       this.image = null;
+      this.t0 = this.clock();
       return this.x.ksweb_init(ramSize >>> 0, (stackSize || 0) >>> 0);
     }
 
