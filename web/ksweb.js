@@ -10,7 +10,7 @@
  */
 (function () {
   'use strict';
-  /* global TerminalView, DebuggerPanel, KsFormat, parseSymbols, KSWEB_EXAMPLES */
+  /* global TerminalView, DebuggerPanel, KsFormat, parseSymbols, KSWEB_EXAMPLES, pageShortcut */
   const $ = (s) => document.querySelector(s);
   const F = KsFormat;
 
@@ -390,9 +390,11 @@
       }
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'F8') { e.preventDefault(); if (['running', 'sleeping', 'waiting'].includes(state.vmState)) pause(); else run(); }
-      else if (e.key === 'F10') { e.preventDefault(); step(1); }
-      else if (e.key === 'F9' && e.shiftKey === false && e.ctrlKey) { e.preventDefault(); toggleDebugger(); }
+      const sc = pageShortcut(e);
+      if (sc) e.preventDefault();
+      if (sc === 'run') { if (['running', 'sleeping', 'waiting'].includes(state.vmState)) pause(); else run(); }
+      else if (sc === 'step') step(1);
+      else if (sc === 'debugger') toggleDebugger();
     });
     setupExamples();
     setupDrop();

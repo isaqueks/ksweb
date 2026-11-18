@@ -17,7 +17,7 @@
  */
 (function (root) {
   'use strict';
-  /* global VtScreen, ATTR, palette256, keyToBytes, LineEditor */
+  /* global VtScreen, ATTR, palette256, keyToBytes, pageShortcut, LineEditor */
 
   const SYSTEM = 1024;           /* bit extra de célula: mensagem do runner */
 
@@ -198,6 +198,7 @@
           this.el.contains(sel.anchorNode)) return;
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V') && !e.altKey) return;  /* colar */
       if (e.metaKey) return;
+      if (pageShortcut(e)) return;                     /* F8/F10/Ctrl+F9: ksweb.js */
       if (e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) {
         e.preventDefault();
         this.el.scrollTop += (e.key === 'PageUp' ? -1 : 1) * this.el.clientHeight * 0.9;

@@ -112,6 +112,7 @@ test: all dist
 	$(NODE) test/test_vt.js
 	$(NODE) test/test_format.js
 	$(NODE) test/test_lineedit.js
+	$(NODE) test/test_terminal.js
 	$(NODE) test/check_dist.js $(DIST)
 
 # Opcional: Chrome/Edge real via DevTools Protocol (Node >= 22; pula se faltar).

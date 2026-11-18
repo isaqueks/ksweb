@@ -8,6 +8,8 @@
  *                         PgUp/PgDn, Insert/Delete, F1..F12, modificadores
  *                         ";2".. ";8", Ctrl+letra = código de controle,
  *                         Alt+tecla = ESC + tecla.
+ *   pageShortcut(ev)      atalho da página (F8, F10, Ctrl+F9) ou null: o
+ *                         terminal não manda essas teclas ao guest.
  *   LineEditor            modo linha ("cooked") com eco local: edita a linha
  *                         no terminal e só a envia no Enter (com "\n").
  *                         Ctrl+D numa linha vazia = EOF; com texto, envia o
@@ -39,6 +41,15 @@
   const CURSOR = { ArrowUp: 'A', ArrowDown: 'B', ArrowRight: 'C', ArrowLeft: 'D', Home: 'H', End: 'F' };
   const TILDE = { Insert: 2, Delete: 3, PageUp: 5, PageDown: 6, F5: 15, F6: 17, F7: 18, F8: 19, F9: 20, F10: 21, F11: 23, F12: 24 };
   const SS3F = { F1: 'P', F2: 'Q', F3: 'R', F4: 'S' };
+
+  /* Atalhos tratados por ksweb.js no document; em qualquer modo do
+   * teclado ficam com a página. */
+  function pageShortcut(ev) {
+    if (ev.key === 'F8') return 'run';
+    if (ev.key === 'F10') return 'step';
+    if (ev.key === 'F9' && ev.ctrlKey && !ev.shiftKey) return 'debugger';
+    return null;
+  }
 
   /* opts: {appCursor, backspace: '\x7f' | '\b', enter: '\r'} */
   function keyToBytes(ev, opts) {
@@ -194,7 +205,7 @@
     }
   }
 
-  const api = { keyToBytes, LineEditor };
+  const api = { keyToBytes, pageShortcut, LineEditor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else Object.assign(root, api);
 })(typeof self !== 'undefined' ? self : this);
