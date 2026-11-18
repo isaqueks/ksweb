@@ -244,8 +244,10 @@
           if (cp === 0x1B) this.state = S.STR_ESC;
           else if (cp === 0x07) this.state = S.GROUND;
           return;
-        case S.STR_ESC:
-          this.state = cp === 0x5C ? S.GROUND : S.STR;
+        case S.STR_ESC:              /* ST; qualquer outro ESC começa outra sequência */
+          if (cp === 0x5C) { this.state = S.GROUND; return; }
+          this.state = S.ESC;
+          this._escChar(cp);
           return;
         default:
           this.state = S.GROUND;

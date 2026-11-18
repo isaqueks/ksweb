@@ -447,6 +447,14 @@ test('sgr-cor-invalida-ou-incompleta-ignorada', () => {
   s.write(E + '[38;2;10;20;30;4m');
   eq([s.fg, !!(s.fl & ATTR.UNDERLINE)], [VtScreen.RGB | 0x0A141E, true], 'truecolor válido');
 });
+test('dcs-sem-st-e-abortado-por-esc', () => {
+  /* Williams/xterm: ESC em qualquer estado começa uma nova sequência. */
+  const s = vt(20, 2);
+  s.write(E + 'Pnunca termina' + E + '[2;1Hok');
+  eq(s.lineText(1), 'ok', 'o CSI depois do DCS sem ST é executado');
+  s.write(E + '_apc' + E + 'c');
+  eq(s.screenText(), '', 'ESC c (RIS) também aborta APC');
+});
 
 /* ---- resize ---- */
 test('resize', () => {
