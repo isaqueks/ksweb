@@ -469,6 +469,21 @@ test('ech-el-vizinhos-de-largo', () => {
   eq(s.lineText(0), 'a de', 'DCH na metade esquerda');
   eq(s.cell(1, 0).fl & (ATTR.WIDE | ATTR.WIDE_CONT), 0, 'sem metade órfã');
 });
+test('escrita-fora-de-banda-no-meio-de-sequencia', () => {
+  /* Mensagens [ksweb] no meio de um OSC/CSI do guest não podem ser
+   * engolidas, e o guest continua a sequência dele depois. */
+  const titles = [];
+  const s = vt(30, 4, { onTitle: (t) => titles.push(t) });
+  s.write('x' + E + ']0;meu tí');
+  s.outOfBand(() => s.write('\r\n[ksweb] fim\r\n'));
+  eq(s.lineText(1), '[ksweb] fim', 'mensagem visível');
+  s.write('tulo\x07' + E + '[');
+  s.outOfBand(() => s.write('[ksweb] dois'));
+  s.write('1mB');
+  eq(titles, ['meu título'], 'o OSC do guest continua intacto');
+  eq(s.lineText(2), '[ksweb] doisB', 'CSI do guest retomado');
+  eq(!!(s.cell(12, 2).fl & ATTR.BOLD), true, 'SGR aplicado');
+});
 
 /* ---- resize ---- */
 test('resize', () => {

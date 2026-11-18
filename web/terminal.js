@@ -241,12 +241,14 @@
     writeSystem(text, kind) {
       const s = this.screen;
       const save = { fg: s.fg, bg: s.bg, fl: s.fl, g: s.g.slice(), gl: s.gl, autowrap: s.autowrap };
-      if (s.x !== 0 || s.wrapPending) s.write('\r\n');
-      s.fg = kind === 'error' ? 1 : kind === 'ok' ? 2 : -1;
-      s.bg = -1;
-      s.fl = SYSTEM | (kind === 'error' ? ATTR.BOLD : 0);
-      s.g = ['B', 'B']; s.gl = 0; s.autowrap = true;
-      for (const line of String(text).split('\n')) s.write('[ksweb] ' + line + '\r\n');
+      s.outOfBand(() => {
+        if (s.x !== 0 || s.wrapPending) s.write('\r\n');
+        s.fg = kind === 'error' ? 1 : kind === 'ok' ? 2 : -1;
+        s.bg = -1;
+        s.fl = SYSTEM | (kind === 'error' ? ATTR.BOLD : 0);
+        s.g = ['B', 'B']; s.gl = 0; s.autowrap = true;
+        for (const line of String(text).split('\n')) s.write('[ksweb] ' + line + '\r\n');
+      });
       s.fg = save.fg; s.bg = save.bg; s.fl = save.fl; s.g = save.g; s.gl = save.gl; s.autowrap = save.autowrap;
       this.editor.clear();
       this._queue();

@@ -189,6 +189,16 @@
       for (let i = 0; i < cps.length; i++) this._feed(cps[i]);
     }
 
+    /* Escrita que não pertence ao fluxo do guest (mensagens [ksweb]): roda
+     * fn com o parser em GROUND e depois devolve a sequência que o guest
+     * deixou pela metade (OSC sem terminador, CSI partido entre fatias...),
+     * para a mensagem não ser engolida nem corromper a sequência. */
+    outOfBand(fn) {
+      const saved = { state: this.state, params: this.params, inter: this.inter, oscBuf: this.oscBuf, lastChar: this.lastChar };
+      this.state = S.GROUND;
+      try { fn(); } finally { Object.assign(this, saved); }
+    }
+
     _feed(cp) {
       /* CAN/SUB abortam qualquer sequência; ESC recomeça (exceto em strings). */
       if (cp === 0x18 || cp === 0x1A) { this.state = S.GROUND; return; }
