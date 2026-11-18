@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ksweb — KSVM v2 no navegador</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <h1>ksweb <small id="version">KSVM</small></h1>
+  <div class="controls" role="toolbar" aria-label="Execução">
+    <button id="btn-open" title="Abrir um arquivo .ksx (ou arraste-o para a página)">Abrir .ksx</button>
+    <input id="file" type="file" accept=".ksx,application/octet-stream" hidden>
+    <select id="examples" aria-label="Exemplos embutidos"><option value="">Exemplos…</option></select>
+    <button id="btn-run" class="primary" title="Executar / continuar (F8)">Executar</button>
+    <button id="btn-stop" title="Parar a VM (Ctrl+Alt+C)">Parar</button>
+    <button id="btn-restart" title="Recarregar a imagem e começar de novo">Reiniciar</button>
+    <button id="btn-step" title="Executar uma instrução (F10)">Passo</button>
+    <label title="RAM do guest">RAM
+      <select id="opt-ram">
+        <option value="64">64 KiB</option><option value="256">256 KiB</option>
+        <option value="1024" selected>1 MiB</option><option value="4096">4 MiB</option>
+        <option value="16384">16 MiB</option><option value="65536">64 MiB</option>
+      </select></label>
+    <label title="Limite de instruções (0 = sem limite), como ksvm --max-insns">Limite
+      <input id="opt-limit" type="number" min="0" value="0" class="num"></label>
+    <button id="btn-dbg" aria-pressed="false" title="Mostrar/esconder o depurador (Ctrl+F9)">Depurador</button>
+  </div>
+</header>
+
+<details class="options">
+  <summary>Opções</summary>
+  <div class="opt-grid">
+    <label>Instruções por fatia <input id="opt-slice" type="number" min="1" value="200000" class="num"></label>
+    <label title="Substitui o stack_size da imagem (0 = o da imagem), como ksvm --stack">Pilha (bytes) <input id="opt-stack" type="number" min="0" value="0" class="num"></label>
+    <label>Teclado
+      <select id="opt-mode"><option value="line" selected>modo linha (eco local)</option><option value="raw">raw (cada tecla)</option></select></label>
+    <label>Backspace envia
+      <select id="opt-bs"><option value="del" selected>DEL (0x7F)</option><option value="bs">BS (0x08)</option></select></label>
+    <label title="GETC/GETS sem dado devolvem -1/AGAIN em vez de suspender a VM (ksvm --stdin-poll)"><input id="opt-poll" type="checkbox"> stdin não bloqueante (poll)</label>
+    <label><input id="opt-regs" type="checkbox"> registradores ao fim</label>
+    <label><input id="opt-autorun" type="checkbox" checked> executar ao carregar</label>
+    <label><input id="opt-clear" type="checkbox" checked> limpar terminal ao carregar</label>
+    <label><input id="opt-dbg-on-fault" type="checkbox" checked> abrir depurador em fault</label>
+    <label><input id="opt-fit" type="checkbox" checked> terminal ajustado à janela</label>
+    <label>Colunas <input id="opt-cols" type="number" min="20" max="400" value="80" class="num"></label>
+    <label>Linhas <input id="opt-rows" type="number" min="5" max="200" value="24" class="num"></label>
+  </div>
+</details>
+
+<main>
+  <section class="term-wrap">
+    <div class="term-head">
+      <span id="prog-name" class="prog">nenhum programa</span>
+      <span id="term-title" class="title"></span>
+      <span id="term-size" class="muted"></span>
+      <span id="status" class="status" data-state="idle">sem programa</span>
+    </div>
+    <div id="term" aria-label="Terminal: saída do programa e entrada pelo teclado" role="textbox" aria-multiline="true"></div>
+    <div class="stdin-bar">
+      <span class="muted">stdin: <span id="mode-hint">linha (eco local)</span> · Ctrl+D = EOF · Ctrl+C envia 0x03 · Ctrl+Alt+C interrompe</span>
+      <button id="btn-eof" title="Fim da entrada">EOF</button>
+      <button id="stdin-file-btn" title="Enviar o conteúdo de um arquivo como entrada">Arquivo → stdin</button>
+      <label class="small"><input id="opt-stdin-eof" type="checkbox" checked> + EOF</label>
+      <input id="stdin-file" type="file" hidden>
+      <button id="btn-copy-all" title="Copiar todo o texto do terminal">Copiar tudo</button>
+      <button id="btn-clear" title="Limpar o terminal">Limpar</button>
+      <span id="insns" class="muted"></span>
+    </div>
+  </section>
+  <aside id="debugger" class="debugger" aria-label="Depurador" hidden></aside>
+</main>
+
+<div id="drop" class="drop" hidden><div>Solte o arquivo .ksx para carregar</div></div>
+
+<script src="vt.js"></script>
+<script src="input.js"></script>
+<script src="format.js"></script>
+<script src="vmcore.js"></script>
+<script src="terminal.js"></script>
+<script src="debugger.js"></script>
+<script src="examples.js"></script>
+<script src="ksweb.js"></script>
+</body>
+</html>

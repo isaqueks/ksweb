@@ -487,6 +487,17 @@ test('cpu-snapshot-e-registradores', () => {
   eq(c.insns, 1, 'insns');
 });
 
+test('regs-dump-igual-ao-ksvm-regs', () => {
+  const F = require('../web/format.js');
+  for (const f of [MK.halt42, path.join(EXDIR, 'fib.ksx'), path.join(EXDIR, 'float.ksx')]) {
+    const r = spawnSync(KSVM, ['--regs', f], { input: '' });
+    const lines = r.stderr.toString().trimEnd().split('\n');
+    const nativeDump = lines.slice(-9).join('\n') + '\n';
+    const w = web(f, {});
+    eq(F.regsDump(w.core.cpu()), nativeDump, 'dump de ' + path.basename(f));
+  }
+});
+
 test('reinit-reaproveita-arena', () => {
   const core = newCore();
   for (let i = 0; i < 50; i++) {

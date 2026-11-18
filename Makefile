@@ -2,6 +2,7 @@
 #
 #   make           build/ksvm.wasm, ferramentas nativas (oráculo) e exemplos
 #   make test      testes em Node (wasm x ksvm nativo, VT, formatadores, dist)
+#   make test-browser  fumaça num Chrome/Edge headless (opcional, Node >= 22)
 #   make dist      dist/ autocontido + dist/ksweb-single.html
 #   make serve     python3 -m http.server em dist/ (PORT=8000)
 #   make clean
@@ -51,7 +52,7 @@ EX_JS    = $(BUILD)/web/examples.js
 
 WEB_FILES = $(wildcard web/*)
 
-.PHONY: all wasm native examples test test-node dist serve clean
+.PHONY: all wasm native examples test test-browser dist serve clean
 
 all: wasm native examples
 
@@ -112,6 +113,10 @@ test: all dist
 	$(NODE) test/test_format.js
 	$(NODE) test/test_lineedit.js
 	$(NODE) test/check_dist.js $(DIST)
+
+# Opcional: Chrome/Edge real via DevTools Protocol (Node >= 22; pula se faltar).
+test-browser: dist
+	$(NODE) test/browser_smoke.js --dist $(DIST)
 
 # ---- Distribuição ---------------------------------------------------------
 
