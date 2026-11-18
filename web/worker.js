@@ -177,19 +177,39 @@ function resumeIfWaiting() {
   }
 }
 
-self.onmessage = async (ev) => {
+/* Mensagens que chegam enquanto o wasm compila esperam o 'ready'. O
+ * handler é síncrono: uma exceção vira o evento 'error' do Worker na
+ * página (num handler async ela sumiria como rejeição não tratada). */
+let early = [];
+
+function init(m) {
+  KsCore.create(m.wasm, {}).then((c) => {
+    core = c;
+    post({ type: 'ready', version: core.version() });
+    const q = early;
+    early = [];
+    for (const x of q) {
+      try { dispatch(x); } catch (e) { setTimeout(() => { throw e; }); }
+    }
+  }, (e) => post({ type: 'fatal', message: 'não consegui instanciar o wasm: ' + (e && e.message ? e.message : e) }));
+}
+
+self.onmessage = (ev) => {
   const m = ev.data;
+  if (m.type === 'init') init(m);
+  else if (!core) early.push(m);
+  else dispatch(m);
+};
+
+function dispatch(m) {
   switch (m.type) {
-    case 'init':
-      core = await KsCore.create(m.wasm, {});
-      post({ type: 'ready', version: core.version() });
-      break;
     case 'load':
       load(m);
       break;
     case 'run':
       if (!session || session.finished) return;
       if (m.slice) session.opts.slice = m.slice;
+      if (running) return;    /* já anda: outra cadeia de fatias cortaria o prazo do SLEEP_MS */
       running = true;
       status(waiting ? 'waiting' : 'running');
       if (!waiting) schedule(0);
@@ -265,4 +285,4 @@ self.onmessage = async (ev) => {
     default:
       break;
   }
-};
+}

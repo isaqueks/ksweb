@@ -108,9 +108,9 @@ Página → worker:
 
 | Mensagem | Campos | Efeito |
 |----------|--------|--------|
-| `init` | `wasm` (ArrayBuffer) | instancia o módulo → `ready` |
+| `init` | `wasm` (ArrayBuffer) | instancia o módulo → `ready` (ou `fatal`); mensagens que chegam antes do `ready` ficam numa fila e são atendidas depois dele |
 | `load` | `image`, `opts {ramSize, stackSize, maxInsns, slice, stdinBlock}` | `ksweb_init` + `ksweb_load` → `loaded` |
-| `run` | `slice?` | começa/continua |
+| `run` | `slice?` | começa/continua; ignorado se a VM já está andando (inclusive esperando entrada ou o prazo de um `SLEEP_MS`) |
 | `pause` | — | para e envia `snapshot` |
 | `step` | `n` | 1 instrução (`ksweb_step`, → `stepped`) ou `ksweb_run(n)` |
 | `input` | `bytes` | entrega ao anel (o excesso fica numa fila no worker) |
@@ -121,12 +121,14 @@ Página → worker:
 | `mem` | `addr`, `len`, `id` | lê memória do guest → `mem` |
 | `trace-export` | — | → `trace-text` |
 
-Worker → página: `ready {version}`, `loaded {ok, header, regions | info}`,
+Worker → página: `ready {version}`, `fatal {message}`, `loaded {ok, header, regions | info}`,
 `output {bytes}`, `status {state, insns, pc, reason?, info?, cpu?}` (estados
 `ready running sleeping waiting paused break done`), `progress {insns,
 ips}` (no máximo a cada 250 ms), `snapshot {cpu, window, stack, fault,
 trace, traceTotal, insns, bps}`, `stepped {pc, text, len, cpu}`,
-`mem {id, addr, bytes, mask}`, `trace-text {text, total, count}`.
+`mem {id, addr, bytes, mask}`, `trace-text {text, total, count}`. O handler
+de mensagens é síncrono: uma exceção chega à página como o evento `error`
+do `Worker`. A página só manda `load` depois do `ready`.
 
 Os contadores de instruções no JS somam as diferenças de `insn_count` a cada
 fatia, então não dão a volta em 2³² como o contador de 32 bits do núcleo.

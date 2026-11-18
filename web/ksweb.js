@@ -16,7 +16,7 @@
 
   const state = {
     worker: null, wasm: null, image: null, imageName: '', header: null,
-    vmState: 'idle', loaded: false, lastInfo: null, pendingRun: false
+    vmState: 'idle', loaded: false, lastInfo: null, pendingRun: false, ready: false
   };
   let term, dbg;
 
@@ -119,11 +119,16 @@
   function onWorker(m) {
     switch (m.type) {
       case 'ready':
+        state.ready = true;
         $('#version').textContent = 'KSVM ' + m.version;
         sys('KSVM ' + m.version + ' em WebAssembly (' + state.wasm.length + ' bytes). Carregue um .ksx (botão, arrastar e soltar ou exemplo).');
         sendDebug();
         setState('idle');
         if (state.image) loadImage(state.image, state.imageName, state.pendingRun);
+        break;
+      case 'fatal':
+        sys('erro no worker: ' + m.message, 'error');
+        setState('error');
         break;
       case 'loaded':
         if (!m.ok) {
@@ -220,7 +225,7 @@
     state.loaded = false;
     state.pendingRun = !!autoRun;
     $('#prog-name').textContent = name;
-    if (!state.worker) return;
+    if (!state.worker || !state.ready) return;       /* o 'ready' carrega state.image */
     sys('carregando ' + name + ' (' + bytes.length + ' bytes)');
     const copy = bytes.slice();
     send({ type: 'load', image: copy.buffer, opts: runOpts() }, [copy.buffer]);

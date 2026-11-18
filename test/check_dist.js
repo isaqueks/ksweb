@@ -106,7 +106,7 @@ async function workerHarness(src) {
   const ctx = {
     console, TextEncoder, TextDecoder, WebAssembly, performance, setTimeout, clearTimeout, MessageChannel,
     importScripts: () => { throw new Error('importScripts não deveria ser chamado'); },
-    postMessage: (m) => { msgs.push(m); wake(); }
+    postMessage: (m) => { m._t = performance.now(); msgs.push(m); wake(); }
   };
   ctx.self = ctx;
   vm.createContext(ctx);
@@ -124,9 +124,18 @@ async function workerHarness(src) {
       await new Promise((res) => { waiter = res; setTimeout(res, 20); });
     }
   }
-  const sendMsg = async (m) => { await ctx.onmessage({ data: m }); };
+  const errors = [];
+  /* sem await: devolve o que onmessage devolver; rejeições ficam em errors */
+  const post = (m) => {
+    try {
+      const r = ctx.onmessage({ data: m });
+      if (r && typeof r.then === 'function') r.catch((e) => errors.push(e));
+      return r;
+    } catch (e) { errors.push(e); return undefined; }
+  };
+  const sendMsg = async (m) => { await post(m); };
   const outputs = () => msgs.filter((m) => m.type === 'output').map((m) => Buffer.from(m.bytes).toString('latin1')).join('');
-  return { msgs, until, send: sendMsg, outputs, ctx };
+  return { msgs, until, send: sendMsg, post, errors, outputs, ctx };
 }
 
 const examplesCtx = pureContext();
@@ -173,6 +182,39 @@ for (const [label, src] of workerSources()) {
     const st = await w.until((m) => m.type === 'status' && m.state === 'done');
     eq(st.info.code, 1);
     eq(w.outputs(), '> OI\n> 1 linhas\n');
+  });
+
+  test('worker-' + label + '-mensagens-antes-do-ready', async () => {
+    /* A página pode mandar load/run logo depois de init, antes do ready. */
+    const w = await workerHarness(src);
+    w.post({ type: 'init', wasm: new Uint8Array(wasmFile).buffer });
+    w.post({ type: 'load', image: exImage('hello'), opts: {} });
+    w.post({ type: 'run' });
+    await w.until((m) => m.type === 'ready');
+    const l = await w.until((m) => m.type === 'loaded');
+    ok(l.ok, 'carregou');
+    const st = await w.until((m) => m.type === 'status' && m.state === 'done');
+    eq(st.info.code, 0);
+    eq(w.outputs(), 'Hello, KSVM!\n');
+    eq(w.errors.map(String), [], 'sem exceções');
+  });
+
+  test('worker-' + label + '-run-repetido-nao-encurta-sleep', async () => {
+    /* "Continuar" do depurador manda run com a VM já andando: não pode
+     * abrir outra cadeia de fatias nem cancelar o prazo do SLEEP_MS. */
+    const w = await workerHarness(src);
+    await w.send({ type: 'init', wasm: new Uint8Array(wasmFile).buffer });
+    await w.until((m) => m.type === 'ready');
+    await w.send({ type: 'load', image: exImage('vtdemo'), opts: {} });
+    await w.until((m) => m.type === 'loaded');
+    await w.send({ type: 'run' });
+    const s1 = await w.until((m) => m.type === 'status' && m.state === 'sleeping');
+    eq(s1.ms, 25, 'prazo do quadro');
+    await w.send({ type: 'run' });
+    await w.send({ type: 'run' });
+    const s2 = await w.until((m) => m.type === 'status' && m.state === 'sleeping');
+    ok(s2._t - s1._t >= 20, 'o quadro seguinte respeitou o prazo: ' + (s2._t - s1._t).toFixed(1) + ' ms');
+    await w.send({ type: 'pause' });
   });
 
   test('worker-' + label + '-depurador', async () => {
