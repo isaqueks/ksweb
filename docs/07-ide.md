@@ -122,9 +122,10 @@ Formato salvo (JSON): `{id, name, main, files: [{name, text}], breakpoints:
 {arquivo: [linhas]}, open: [abas], active, created, updated, example}`.
 
 **Exportar** baixa `nome.zip` com os arquivos e um `ksweb-projeto.json`
-(`{name, main, breakpoints}`); **Importar** aceita esse `.zip` (ou qualquer
-`.zip` com `.ksasm/.asm/.s/.inc`, com ou sem pasta-raiz, entradas
-comprimidas ou não), arquivos de texto soltos (entram no projeto atual) e
+(`{name, main, breakpoints}`); **Importar** aceita esse `.zip` (a pasta do
+manifesto é a raiz do projeto e todos os arquivos voltam, com os nomes, o
+principal e os breakpoints) ou qualquer `.zip` com `.ksasm/.asm/.s/.inc/.txt/.md`
+(com ou sem pasta-raiz, entradas comprimidas ou não), arquivos de texto soltos (entram no projeto atual) e
 `.ksx` (modo simples). ☰ também baixa os arquivos um a um e a imagem
 `.ksx` montada.
 
@@ -144,4 +145,6 @@ comprimidas ou não), arquivos de texto soltos (entram no projeto atual) e
 - Sem `kscc` (C) no navegador e sem o grupo 3 de syscalls (arquivos):
   04-roadmap.md.
 - Um só projeto aberto por aba do navegador; duas abas da IDE no mesmo
-  navegador compartilham o banco e o último a salvar vence.
+  navegador compartilham o banco e a última a salvar uma alteração vence
+  (uma aba que só está aberta não grava nada ao fechar ou trocar de
+  projeto).

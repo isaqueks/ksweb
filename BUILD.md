@@ -26,8 +26,10 @@ Ferramentas usadas:
   (`$(WASI_SYSROOT)/include/wasm32-wasi`), `WASI_LIB`
   (`$(WASI_SYSROOT)/lib/wasm32-wasi`). Os fontes vêm direto da ksvm2
   (`src/tools/ksas/*.c`, `src/tools/ksdis/*.c`, `src/tools/toolio.c` e o
-  núcleo), sem nenhum `#define` nem wrapper, com as mesmas flags de aviso e
-  `-Werror`; não faltou nenhum símbolo `__*` (não há compiler-rt para WASI
+  núcleo), sem nenhum `#define`, com as mesmas flags de aviso e `-Werror`;
+  o único ajuste é `src/wasi_strtof.c`, ligado ao `ksas.wasm` com
+  `wasm-ld --wrap=strtof`: o `strtof` da wasi-libc (musl) ignora o sinal de
+  `-nan` e a imagem sairia diferente da nativa (`-nan` = `0xFFC00000`); não faltou nenhum símbolo `__*` (não há compiler-rt para WASI
   nesta máquina, e não foi preciso). O `ksas` usa a config padrão do núcleo
   e o `ksdis` a das ferramentas (`-DKSVM_ENABLE_TRACE=1
   -DKSVM_ENABLE_SYSCALL_FS=1`), como no Makefile da ksvm2.

@@ -11,14 +11,15 @@ pelo Makefile da ksvm2.
 | `test/test_format.js` | 10 | formatadores do depurador (`web/format.js`) |
 | `test/test_lineedit.js` | 9 | teclado → bytes, editor de linha (`web/input.js`) com eco pelo VT e atalhos da IDE |
 | `test/test_terminal.js` | 5 | `TerminalView` (`web/terminal.js`) num DOM falso: teclado, mensagens do runner, HTML escapado |
-| `test/test_wasm_tools.js` | 56 | `ksas.wasm`/`ksdis.wasm` pelo shim WASI × `ksas`/`ksdis` nativos |
+| `test/test_wasm_tools.js` | 58 | `ksas.wasm`/`ksdis.wasm` pelo shim WASI × `ksas`/`ksdis` nativos |
 | `test/test_isa.js` | 9 | `isa.json` × `isa.def` e as tabelas do ksas |
-| `test/test_asmtools.js` | 21 | erros, listing, mapa linha ↔ endereço, breakpoint movido, tokenizer, autocomplete, ajuda |
-| `test/test_project.js` | 9 | explorador, IndexedDB falso e fallbacks, `.zip` e inflate |
+| `test/test_asmtools.js` | 23 | erros (nomes normalizados), alcance dos `.include`, listing, mapa linha ↔ endereço, breakpoint movido, tokenizer, autocomplete, ajuda |
+| `test/test_project.js` | 11 | explorador, IndexedDB falso e fallbacks, `.zip` e inflate |
+| `test/test_worker.js` | 5 | o `worker.js` num contexto vm: passo por cima/sair da função com entrada pendente, Passo N, breakpoint |
 | `test/check_dist.js` | 21 | `dist/`, `ksweb-single.html` e os dois workers pelo protocolo de mensagens |
 | `test/browser_smoke.js` | opcional | a IDE num Chrome/Edge headless (`make test-browser`) |
 
-Total do `make test`: 300 casos em 10 suítes.
+Total do `make test`: 311 casos em 11 suítes.
 
 ## `run_node.js`
 
@@ -114,7 +115,14 @@ em memória, e o `ksas`/`ksdis` nativos de `build/native/` são o oráculo:
 - o shim: `-o` criando arquivo em subpasta, caminhos com `./` e `../`,
   diretório como entrada, caminho fora da raiz, pasta inexistente, `Map` e
   objeto como FS, e um módulo wasm escrito à mão que importa um
-  `fd_advise` não implementado (recebe `ENOSYS`) e sai por `proc_exit`.
+  `fd_advise` não implementado (recebe `ENOSYS`) e sai por `proc_exit`;
+- a **sonda** `test/wasi_probe.c`, compilada com a wasi-libc (roda pelo
+  shim) e com a libc do host (num diretório de verdade): mesma saída,
+  stderr, código e arquivos (truncar e escrever além do fim, `ftruncate`,
+  `lseek` 0/1/2 e negativo, `writev`/`readv`, EOF, append, `O_EXCL`,
+  diretórios, `./` e `..`, `unlink`/`rmdir`, argv UTF-8);
+- `.float`/`fli` com `-nan`, `+nan`, `nan(...)` e 230 literais variados:
+  imagem igual à nativa e os bits esperados (`-nan` = `0xFFC00000`).
 
 ## `test_isa.js`
 
@@ -159,10 +167,22 @@ breakpoints e abas, duplicar, excluir, principal reatribuído), JSON de ida
 e volta, **IndexedDB falso** assíncrono (salvar, listar por data, "reabrir
 a página" com outro `ProjectStore`, autosave visível, excluir, meta),
 fallback para localStorage quando o IndexedDB falha e para memória com o
-localStorage cheio, `.zip` de ida e volta com nomes UTF-8, CRC corrompido,
+localStorage cheio e com os globais lançando `SecurityError`, `.zip` de ida
+e volta com nomes UTF-8 (projeto numa pasta, arquivos sem extensão de
+fonte, breakpoints e principal preservados), CRC corrompido,
 inflate contra o zlib do Node em todos os níveis (stored, fixo, dinâmico),
 `.zip` com pasta-raiz e entradas deflate, manifesto, e o zip gerado aberto
 pelo `zipfile` do Python.
+
+## `test_worker.js`
+
+Carrega `web/worker.js` num contexto `vm` do Node (`self`, `postMessage`,
+`MessageChannel`) com o `ksvm.wasm` e um programa montado pelo
+`ksas.wasm` (`_start` → `main` → `f`, que lê com `GETC`): passo por cima
+que espera entrada e termina quando ela chega; F11 e Passo N durante essa
+espera desligam a parada por profundidade (o Continuar seguinte vai até o
+fim, o Passo N executa N instruções); sair da função em `_start` roda até o
+fim; breakpoint dentro da função interrompe o passo por cima e o desliga.
 
 ## `test_vt.js`
 
@@ -254,6 +274,11 @@ DevTools Protocol (`make test-browser`, ou pelo Node do Windows:
   breakpoint da linha do fonte; o pc fica destacado no desassembly), e o
   **modo simples** (`hello.ksx` pelo seletor de arquivo roda direto e o
   centro mostra o desassembly); F1 abre e Esc fecha a ajuda;
+- duas abas da IDE no mesmo banco: a que só está aberta, ao recarregar, não
+  apaga o que a outra salvou;
+- erro no principal não gera erros falsos no arquivo incluído aberto;
+- `localStorage` e `IndexedDB` que lançam `SecurityError` (a IDE abre só em
+  memória) e layout salvo corrompido (tipos errados, enorme, JSON inválido);
 - confere o tema claro (terminal e editor) e a mensagem de orientação do
   `index.html` por `file://`; falha em qualquer exceção ou `console.error`.
 

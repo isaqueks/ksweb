@@ -216,7 +216,9 @@ desatualizada (um contador de versão do projeto); Executar remonta.
   os headers e a `libc.a` da wasi-libc e ligados com `crt1-command.o`
   (BUILD.md). Nenhum fonte da ksvm2 é alterado nem precisa de `#define`: o
   `ksas` já separa a E/S (`main.c`) do montador e usa só `stdio`/`malloc`;
-  `strtof` (literais float) vem da wasi-libc (musl). Como no Makefile da
+  `strtof` (literais float) vem da wasi-libc (musl), envolvido por
+  `src/wasi_strtof.c` (`--wrap=strtof`) porque o da musl ignora o sinal de
+  `-nan`. Como no Makefile da
   ksvm2, o `ksas` usa a config padrão do núcleo e o `ksdis` a das
   ferramentas (trace e grupo 3 ligados). ~100 KB e ~70 KB.
 - **Shim WASI** (`wasi.js`, sem dependências): `runWasi(módulo, {args,
