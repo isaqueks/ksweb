@@ -231,8 +231,11 @@
     /* env: {indexedDB, localStorage} (padrão: os globais) */
     constructor(env) {
       env = env || {};
-      this.idb = 'indexedDB' in env ? env.indexedDB : (typeof indexedDB !== 'undefined' ? indexedDB : null);
-      this.ls = 'localStorage' in env ? env.localStorage : (typeof localStorage !== 'undefined' ? localStorage : null);
+      /* com cookies/armazenamento bloqueados, só ler window.localStorage ou
+       * window.indexedDB já lança SecurityError: vira "não tem" */
+      const global = (name) => { try { return typeof root[name] !== 'undefined' ? root[name] : null; } catch (e) { return null; } };
+      this.idb = 'indexedDB' in env ? env.indexedDB : global('indexedDB');
+      this.ls = 'localStorage' in env ? env.localStorage : global('localStorage');
       this.dbName = env.dbName || 'ksweb-ide';
       this.backend = null;
     }

@@ -188,6 +188,21 @@ test('fallback: IndexedDB falha -> localStorage; nada -> memória', async () => 
   eq((await s3.load(p.id)).name, 'gama');
 });
 
+/* Cookies/armazenamento bloqueados no navegador: ler window.localStorage ou
+ * window.indexedDB lança SecurityError. O ProjectStore com os globais
+ * padrão (project.js carregado como <script>, root = self) cai na memória
+ * em vez de derrubar a página. */
+test('globais localStorage/indexedDB que lançam SecurityError -> memória', async () => {
+  const vm = require('vm');
+  const ctx = { TextEncoder, TextDecoder, console };
+  for (const k of ['localStorage', 'indexedDB']) Object.defineProperty(ctx, k, { get() { throw new Error('SecurityError: bloqueado'); } });
+  ctx.self = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(require('fs').readFileSync(require.resolve('../web/project.js'), 'utf8'), ctx);
+  const s = vm.runInContext('new KsProject.ProjectStore()', ctx);
+  eq(await s.open(), 'memory');
+});
+
 /* ---- zip ---- */
 
 test('zip: ida e volta com nomes UTF-8 e pastas', async () => {
