@@ -16,12 +16,19 @@
   const MIN = { left: 120, right: 220, bottom: 90 };
   const DEF = { left: 210, right: 420, bottom: 300, no: { left: false, right: false, bottom: false }, panel: 'terminal' };
 
+  /* Estado salvo, campo a campo: JSON inválido, tipos errados ou valores
+   * absurdos (editados à mão, de outra versão) caem no padrão. */
   function load() {
-    try {
-      const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-      if (s && typeof s === 'object') return Object.assign({}, DEF, s, { no: Object.assign({}, DEF.no, s.no || {}) });
-    } catch (e) { /* sem localStorage */ }
-    return JSON.parse(JSON.stringify(DEF));
+    const st = JSON.parse(JSON.stringify(DEF));
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { s = null; }
+    if (!s || typeof s !== 'object') return st;
+    for (const k of ['left', 'right', 'bottom']) {
+      if (typeof s[k] === 'number' && Number.isFinite(s[k])) st[k] = s[k];
+      if (s.no && typeof s.no === 'object') st.no[k] = s.no[k] === true;
+    }
+    if (typeof s.panel === 'string') st.panel = s.panel;
+    return st;
   }
 
   class KsLayout {
@@ -30,7 +37,8 @@
       this.ws = document.getElementById('workspace');
       this.root = document.documentElement;
       this.state = load();
-      if (window.innerWidth < 900 && !localStorage.getItem(KEY)) this.state.no.right = true;
+      if (window.innerWidth < 900 && !this._stored()) this.state.no.right = true;
+      this._fit();
       this._apply();
       for (const sp of document.querySelectorAll('.splitter')) this._bindSplitter(sp);
       for (const b of document.querySelectorAll('[data-collapse]')) b.addEventListener('click', () => this.collapse(b.dataset.collapse, true));
@@ -92,9 +100,26 @@
       if (this.opts.onPanel) this.opts.onPanel(name);
     }
 
-    _size(which, v) {
+    _stored() { try { return localStorage.getItem(KEY) !== null; } catch (e) { return false; } }
+
+    _clamp(which, v) {
       const max = which === 'bottom' ? window.innerHeight - 160 : window.innerWidth * 0.6;
-      this.state[which] = Math.round(Math.max(MIN[which], Math.min(max, v)));
+      return Math.round(Math.max(MIN[which], Math.min(max, v)));
+    }
+
+    /* Tamanhos salvos numa tela maior não podem esconder o editor nesta. */
+    _fit() {
+      const s = this.state;
+      for (const k of ['left', 'right', 'bottom']) s[k] = this._clamp(k, s[k]);
+      const room = window.innerWidth - 320;
+      if (s.left + s.right > room) {
+        s.right = Math.max(MIN.right, room - s.left);
+        s.left = Math.max(MIN.left, room - s.right);
+      }
+    }
+
+    _size(which, v) {
+      this.state[which] = this._clamp(which, v);
       this._apply();
     }
 

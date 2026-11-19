@@ -384,6 +384,38 @@ async function openPage(url) {
       await light.until(termText + '.includes("pronto!")', 10000);
       await light.shot('light-vtdemo');
     });
+    log('armazenamento bloqueado e layout salvo corrompido');
+    await check('localStorage e IndexedDB bloqueados (SecurityError): a IDE abre só em memória', async () => {
+      const c = await openPage(single);
+      await c.send('Page.addScriptToEvaluateOnNewDocument', { source:
+        "for (const k of ['localStorage', 'indexedDB']) Object.defineProperty(window, k, { configurable: true, get() { throw new DOMException('bloqueado', 'SecurityError'); } });" });
+      await c.send('Page.reload');
+      await sleep(300);
+      await c.until('window.ksweb && ksweb.state.project && ksweb.state.asm.ready', 10000, 'IDE carregada');
+      const st = await c.eval('document.querySelector("#sb-store").textContent');
+      if (st !== 'sem persistência') throw new Error('barra de status: ' + st);
+      await c.eval('ksweb.build()');
+      await c.until('document.querySelector("#asm-output").textContent.includes("; simbolos")', 4000, 'montou');
+      const p = c.problems();
+      if (p.length) throw new Error(p.join('\n'));
+    });
+    await check('layout salvo com tipos errados, tamanhos enormes ou JSON inválido', async () => {
+      const c = await openPage(single);
+      await c.until('window.ksweb && ksweb.layout', 10000);
+      for (const saved of ['{"left":"x","right":50000,"bottom":-40,"no":7,"panel":3}', '{"left":2000,"right":2000,"no":{"left":"sim"}}', '{nao é json', '[1,2]']) {
+        await c.eval('localStorage.setItem("ksweb-ide:layout", ' + JSON.stringify(saved) + ')');
+        await c.send('Page.reload');
+        await sleep(300);
+        await c.until('window.ksweb && ksweb.layout && document.querySelector(".cm-editor")', 10000, 'recarregou');
+        const w = await c.eval('document.querySelector(".center").getBoundingClientRect().width');
+        if (!(w >= 300)) throw new Error(saved + ': centro com ' + w + 'px');
+        const vars = await c.eval('["--left-w","--right-w","--bottom-h"].map((v) => document.documentElement.style.getPropertyValue(v)).join(" ")');
+        if (!/^\d+px \d+px \d+px$/.test(vars)) throw new Error(saved + ': ' + vars);
+      }
+      await c.eval('localStorage.removeItem("ksweb-ide:layout")');
+      const p = c.problems();
+      if (p.length) throw new Error(p.join('\n'));
+    });
     const fileIdx = await openPage('file:///' + path.join(DIST, 'index.html').replace(/\\/g, '/'));
     log('index.html por file://');
     await check('mensagem de orientação', () => fileIdx.until(termText + '.includes("WebAssembly") || ' + termText + '.includes("ksweb-single.html")', 8000));
