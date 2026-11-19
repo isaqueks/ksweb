@@ -239,6 +239,32 @@ test('shim: -o cria arquivo, caminhos com ./ e ../, diretório como entrada', ()
   ok(!w4.files.has('naodir/out.txt'), 'nada criado');
 });
 
+/* test/wasi_probe.c compilado com a wasi-libc (pelo shim) e com a libc do
+ * host (num diretório de verdade): mesma saída e mesmos arquivos. Cobre
+ * truncar e escrever além do fim (o buraco é zero), ftruncate, lseek
+ * 0/1/2 e negativo, writev/readv com vários iovecs, EOF, append, O_EXCL,
+ * diretórios, caminhos com ./ e .., unlink/rmdir, close de fd inválido,
+ * argv UTF-8 com espaços, stdin, stderr e o código de saída. */
+test('shim: sonda C (wasi-libc pelo shim) = libc do host', () => {
+  const probeWasm = path.join(BUILD, 'wasi_probe.wasm'), probeNative = path.resolve(NATIVE, 'wasi_probe');
+  ok(fs.existsSync(probeWasm) && fs.existsSync(probeNative), 'sondas construídas (make test)');
+  const init = { 'old.txt': 'X'.repeat(64), 'in.txt': 'abcdefghij' };
+  const dir = path.join(WORK, 'probe');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [k, v] of Object.entries(init)) fs.writeFileSync(path.join(dir, k), v);
+  const argv = ['é um', 'a b', ''];
+  const n = spawnSync(probeNative, argv, { cwd: dir, input: 'entrada', argv0: 'probe' });
+  const w = runWasi(fs.readFileSync(probeWasm), { args: ['probe'].concat(argv), files: init, stdin: 'entrada' });
+  eq(w.exitCode, n.status, 'código de saída');
+  eq(w.stdout, n.stdout.toString('utf8'), 'saída');
+  eq(w.stderr, n.stderr.toString('utf8'), 'stderr');
+  const left = fs.readdirSync(dir).sort();
+  eq(JSON.stringify([...w.files.keys()].sort()), JSON.stringify(left), 'arquivos que sobraram');
+  for (const f of left) sameBytes(fs.readFileSync(path.join(dir, f)), w.files.get(f), f);
+  ok(/trunc\+seek: 61 62 00 00 00 00 00 00 00 00 7a/.test(w.stdout), 'buraco com zeros');
+});
+
 test('shim: ksas lê o mesmo arquivo de entrada com Map e com objeto', () => {
   const src = '_start: li r1, 7\n  halt\n';
   const a = runWasi(KSAS_WASM, { args: ['ksas', 'x.ksasm'], files: { 'x.ksasm': src } });

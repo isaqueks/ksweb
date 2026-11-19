@@ -209,6 +209,9 @@
             if (!f.write) return E.BADF;
             if (f.append) f.pos = f.size;
             ensureCap(f, f.pos + l);
+            /* escrita além do fim: o buraco é zero (o buffer pode guardar
+             * bytes antigos depois de O_TRUNC ou de um ftruncate menor) */
+            if (f.pos > f.size) f.data.fill(0, f.size, f.pos);
             f.data.set(chunk, f.pos);
             f.pos += l;
             if (f.pos > f.size) f.size = f.pos;

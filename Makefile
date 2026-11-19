@@ -139,6 +139,21 @@ $(KSDIS_WASM): $(WASI_KSDIS_OBJ) $(WASI_CORE_TOOLS)
 	@$(WASM_LD) $^ $(WASI_LDFLAGS) -o $@
 	@echo "ksdis.wasm: $$(wc -c <$@) bytes"
 
+# Sonda do shim WASI para os testes: o mesmo C com a wasi-libc e com a libc
+# do host (test/wasi_probe.c, comparados em test_wasm_tools.js).
+WASI_PROBE   = $(BUILD)/wasi_probe.wasm
+NATIVE_PROBE = $(NATIVE)/wasi_probe
+
+$(WASI_PROBE): test/wasi_probe.c
+	@mkdir -p $(BUILD)/wasi
+	@$(CLANG) --target=wasm32-wasi -isystem $(WASI_INC) -nostdlib -std=c99 -O1 \
+	    -D_POSIX_C_SOURCE=200809L $(WARN) -c $< -o $(BUILD)/wasi/wasi_probe.o
+	@$(WASM_LD) $(BUILD)/wasi/wasi_probe.o $(WASI_LDFLAGS) -o $@
+
+$(NATIVE_PROBE): test/wasi_probe.c
+	@mkdir -p $(dir $@)
+	@$(HOSTCC) -std=c99 -O1 -D_POSIX_C_SOURCE=200809L -Wall -Wextra $< -o $@
+
 # ---- isa.json ---------------------------------------------------------------
 
 $(ISADUMP): tools/isadump.c $(KSAS_LIB_SRC) $(CORE_SRC) $(K)/include/ksvm/isa.def
@@ -186,7 +201,7 @@ $(EX_JS): $(EX_KSX) tools/mkexamples.js examples/menu.json
 
 # ---- Testes ---------------------------------------------------------------
 
-test: all dist
+test: all dist $(WASI_PROBE) $(NATIVE_PROBE)
 	$(NODE) test/run_node.js --wasm $(WASM) --native $(NATIVE) --examples $(BUILD)/examples \
 	    --ksvm2 $(K)
 	$(NODE) test/test_vt.js
