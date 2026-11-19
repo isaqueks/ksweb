@@ -189,6 +189,7 @@ test: all dist
 	$(NODE) test/test_wasm_tools.js --build $(BUILD) --native $(NATIVE) --ksvm2 $(K)
 	$(NODE) test/test_isa.js --isa $(ISA_JSON) --ksas $(KSAS_WASM) --ksvm2 $(K)
 	$(NODE) test/test_asmtools.js --build $(BUILD) --native $(NATIVE) --ksvm2 $(K)
+	$(NODE) test/test_project.js
 	$(NODE) test/check_dist.js $(DIST)
 
 # Opcional: Chrome/Edge real via DevTools Protocol (Node >= 22; pula se faltar).
