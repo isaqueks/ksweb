@@ -76,7 +76,7 @@ EX_LOCAL = $(wildcard examples/*.ksasm)
 EX_KSX   = $(patsubst %.ksasm,$(BUILD)/examples/%.ksx,$(notdir $(EX_KSVM2) $(EX_LOCAL)))
 EX_JS    = $(BUILD)/web/examples.js
 
-WEB_FILES = $(wildcard web/*)
+WEB_FILES = $(wildcard web/*.html web/*.css web/*.js web/vendor/*)
 
 .PHONY: all wasm wasi isa native examples test test-browser dist serve clean editor
 
@@ -200,11 +200,13 @@ test-browser: dist
 
 dist: $(DIST)/ksweb-single.html
 
-$(DIST)/ksweb-single.html: $(WASM) $(EX_JS) $(EX_KSX) $(WEB_FILES) tools/mksingle.js
+$(DIST)/ksweb-single.html: $(WASM) $(KSAS_WASM) $(KSDIS_WASM) $(ISA_JSON) $(ISA_JS) $(EX_JS) $(EX_KSX) \
+                           $(WEB_FILES) tools/mksingle.js
 	@rm -rf $(DIST)
-	@mkdir -p $(DIST)/examples
-	cp web/* $(DIST)/
-	cp $(WASM) $(EX_JS) $(DIST)/
+	@mkdir -p $(DIST)/examples $(DIST)/vendor
+	cp web/*.html web/*.css web/*.js $(DIST)/
+	cp web/vendor/* $(DIST)/vendor/
+	cp $(WASM) $(KSAS_WASM) $(KSDIS_WASM) $(EX_JS) $(ISA_JSON) $(ISA_JS) $(DIST)/
 	cp $(EX_KSX) $(DIST)/examples/
 	$(NODE) tools/mksingle.js $(DIST) $@
 	@echo "dist/: $$(ls $(DIST) | wc -l) arquivos; ksweb-single.html: $$(wc -c <$@) bytes"

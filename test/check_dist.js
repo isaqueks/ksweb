@@ -44,20 +44,50 @@ test('dist-arquivos', () => {
   const idx = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
   const refs = [...idx.matchAll(/(?:src|href)="([^"]+)"/g)].map((m) => m[1]);
   ok(refs.length >= 8, 'referências em index.html');
-  for (const r of refs.concat(['ksvm.wasm', 'worker.js'])) ok(fs.existsSync(path.join(dist, r)), 'falta ' + r);
+  const need = ['ksvm.wasm', 'ksas.wasm', 'ksdis.wasm', 'worker.js', 'asm-worker.js', 'wasi.js', 'isa.json', 'isa.js', 'vendor/codemirror.bundle.js', 'vendor/LICENSES.md'];
+  for (const r of refs.concat(need)) ok(fs.existsSync(path.join(dist, r)), 'falta ' + r);
+  ok(refs.includes('vendor/codemirror.bundle.js') && refs.includes('isa.js') && refs.includes('editor.js'), 'index.html carrega editor e isa');
   const ex = fs.readdirSync(path.join(dist, 'examples')).filter((f) => f.endsWith('.ksx'));
   ok(ex.length >= 10, 'exemplos .ksx em dist/examples');
   ok(!/https?:\/\//.test(idx.replace(/<!--[\s\S]*?-->/g, '')), 'index.html sem URLs externas');
 });
 
+/* URLs que podem aparecer no texto sem buscar nada: namespaces XML usados
+ * pelo CodeMirror em createElementNS e o comentário de licença do bundle. */
+const URL_OK = new Set(['http://www.w3.org/2000/svg', 'http://www.w3.org/1999/xhtml', 'http://www.w3.org/1999/xlink', 'https://codemirror.net']);
+
 test('single-autocontido', () => {
   ok(!/<script[^>]+src=/.test(single), 'nenhum <script src>');
   ok(!/<link[^>]+href=/.test(single), 'nenhum <link href>');
   ok(!/\bfetch\(\s*['"]https?:/.test(single), 'sem fetch externo');
+  ok(!/\b(?:src|href)\s*=\s*['"]?https?:|url\(\s*['"]?https?:|@import|importScripts\(\s*['"]https?:|\bimport\(\s*['"]https?:/i.test(single), 'nenhuma referência a recurso externo');
+  const urls = [...new Set([...single.matchAll(/https?:\/\/[^\s"'`)<>\\]+/g)].map((m) => m[0].replace(/[.,;]+$/, '')))];
+  eq(urls.filter((u) => !URL_OK.has(u)), [], 'URLs no arquivo único (só namespaces e o comentário de licença)');
   const m = /window\.KSWEB_WASM_B64 = "([A-Za-z0-9+/=]+)"/.exec(single);
   ok(m, 'wasm em base64');
   ok(Buffer.from(m[1], 'base64').equals(wasmFile), 'base64 = dist/ksvm.wasm');
-  ok(/id="ksweb-worker-src"/.test(single), 'código do worker embutido');
+  for (const [v, f] of [['KSWEB_KSAS_B64', 'ksas.wasm'], ['KSWEB_KSDIS_B64', 'ksdis.wasm']]) {
+    const x = new RegExp('window\\.' + v + ' = "([A-Za-z0-9+/=]+)"').exec(single);
+    ok(x && Buffer.from(x[1], 'base64').equals(fs.readFileSync(path.join(dist, f))), v + ' = dist/' + f);
+  }
+  ok(/id="ksweb-worker-src"/.test(single), 'código do worker da VM embutido');
+  ok(/id="ksweb-asm-worker-src"/.test(single), 'código do worker do assembler embutido');
+  const bundle = fs.readFileSync(path.join(dist, 'vendor/codemirror.bundle.js'), 'utf8');
+  ok(single.includes('/* vendor/codemirror.bundle.js */') && single.length > bundle.length, 'editor (CodeMirror) embutido');
+});
+
+test('single-isa-e-exemplos-com-fonte', () => {
+  const ctx = pureContext();
+  const s = scripts(single).filter((x) => /^\s*\/\* (isa|examples)\.js \*\//.test(x.code));
+  eq(s.length, 2, 'isa.js e examples.js inline');
+  for (const { code } of s) vm.runInContext(code, ctx);
+  const isa = JSON.parse(fs.readFileSync(path.join(dist, 'isa.json'), 'utf8'));
+  eq(JSON.parse(JSON.stringify(ctx.KSWEB_ISA)), isa, 'isa.js = isa.json');
+  ok(isa.instructions.length >= 100, 'instruções no isa.json');
+  for (const e of ctx.KSWEB_EXAMPLES) {
+    ok(e.files && e.files[e.main], e.name + ': fonte embutido');
+    for (const [n, t] of Object.entries(e.files)) for (const inc of t.matchAll(/^\s*\.include\s+"([^"]+)"/gm)) ok(e.files[inc[1]] !== undefined, e.name + ': ' + n + ' inclui ' + inc[1]);
+  }
 });
 
 test('single-scripts-compilam', () => {
@@ -293,6 +323,37 @@ for (const [label, src] of workerSources()) {
     await w.send({ type: 'debug', debug: { on: true, traceN: 0, bps: [], stopBrk: true, stopSyscall: false } });
     await w.send({ type: 'run' });
     eq((await w.until((m) => m.type === 'status' && m.state === 'done')).info.code, 0);
+  });
+}
+
+/* ---- worker do assembler (asm-worker.js) num self falso ---- */
+function asmWorkerSources() {
+  const s = scripts(single).find((x) => /ksweb-asm-worker-src/.test(x.attrs));
+  return [
+    ['single', s.code],
+    ['dist', ['wasi.js', 'ksasm-lang.js', 'asmtools.js', 'asm-worker.js'].map((f) => fs.readFileSync(path.join(dist, f), 'utf8')).join('\n;\n')]
+  ];
+}
+
+for (const [label, src] of asmWorkerSources()) {
+  test('asm-worker-' + label + '-monta-e-desmonta', async () => {
+    const w = await workerHarness(src);
+    const buf = (f) => new Uint8Array(fs.readFileSync(path.join(dist, f))).buffer;
+    const ex = EXAMPLES.find((e) => e.name === 'fib');
+    w.post({ type: 'assemble', id: 1, files: Object.entries(ex.files), main: ex.main, debug: false });   /* antes do ready */
+    await w.send({ type: 'init', ksas: buf('ksas.wasm'), ksdis: buf('ksdis.wasm'), isa: JSON.parse(fs.readFileSync(path.join(dist, 'isa.json'), 'utf8')) });
+    await w.until((m) => m.type === 'ready');
+    const a = await w.until((m) => m.type === 'assembled' && m.id === 1);
+    ok(a.result.ok, 'montou: ' + a.result.stderr);
+    ok(Buffer.from(a.result.image).equals(Buffer.from(exImage('fib'))), 'imagem = a do ksas nativo (dist/examples)');
+    ok(Object.prototype.toString.call(a.result.info.addrLine) === '[object Map]' && a.result.info.code.get('lib/io.ksasm').length > 10, 'mapa linha <-> endereço com o .include');
+    await w.send({ type: 'assemble', id: 2, files: [['m.ksasm', '_start:\n  add r1\n']], main: 'm.ksasm' });
+    const b = await w.until((m) => m.type === 'assembled' && m.id === 2);
+    ok(!b.result.ok && b.result.diagnostics[0].line === 2 && /esperado/.test(b.result.diagnostics[0].message), 'erro com linha');
+    await w.send({ type: 'disassemble', id: 3, image: new Uint8Array(a.result.image).buffer });
+    const d = await w.until((m) => m.type === 'disassembled' && m.id === 3);
+    ok(d.ok && d.rows.some((r) => r.code && r.addr === 0x10 && /\bcall\b/.test(r.text)), 'desassembly com endereços');
+    eq(w.errors.map(String), [], 'sem exceções');
   });
 }
 

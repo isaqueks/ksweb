@@ -3,76 +3,212 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ksweb — KSVM v2 no navegador</title>
+<title>ksweb — IDE da KSVM v2</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="bar">
-  <h1>ksweb <small id="version">KSVM</small></h1>
-  <div class="controls" role="toolbar" aria-label="Execução">
-    <button id="btn-open" title="Abrir um arquivo .ksx (ou arraste-o para a página)">Abrir .ksx</button>
-    <input id="file" type="file" accept=".ksx,application/octet-stream" hidden>
-    <select id="examples" aria-label="Exemplos embutidos"><option value="">Exemplos…</option></select>
-    <button id="btn-run" class="primary" title="Executar / continuar (F8)">Executar</button>
-    <button id="btn-stop" title="Parar a VM (Ctrl+Alt+C)">Parar</button>
-    <button id="btn-restart" title="Recarregar a imagem e começar de novo">Reiniciar</button>
-    <button id="btn-step" title="Executar uma instrução (F10)">Passo</button>
-    <label title="RAM do guest">RAM
-      <select id="opt-ram">
-        <option value="64">64 KiB</option><option value="256">256 KiB</option>
-        <option value="1024" selected>1 MiB</option><option value="4096">4 MiB</option>
-        <option value="16384">16 MiB</option><option value="65536">64 MiB</option>
-      </select></label>
-    <label title="Limite de instruções (0 = sem limite), como ksvm --max-insns">Limite
-      <input id="opt-limit" type="number" min="0" value="0" class="num"></label>
-    <button id="btn-dbg" aria-pressed="false" title="Mostrar/esconder o depurador (Ctrl+F9)">Depurador</button>
+<header class="topbar">
+  <div class="brand"><strong>ksweb</strong> <small id="version">KSVM</small></div>
+  <div class="proj">
+    <div class="menu-wrap">
+      <button id="btn-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Menu do projeto" title="Projetos, importar e exportar">☰ Projeto</button>
+      <div id="menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-act="new-project">Novo projeto…</button>
+        <div class="menu-sub" id="menu-projects" role="group" aria-label="Abrir projeto"></div>
+        <hr>
+        <button role="menuitem" data-act="rename-project">Renomear projeto…</button>
+        <button role="menuitem" data-act="delete-project">Excluir projeto…</button>
+        <hr>
+        <button role="menuitem" data-act="import-files">Importar arquivos (.ksasm, .zip, .ksx)…</button>
+        <button role="menuitem" data-act="export-zip">Exportar projeto (.zip)</button>
+        <button role="menuitem" data-act="export-files">Exportar arquivos (um por um)</button>
+        <button role="menuitem" data-act="export-ksx">Baixar a imagem montada (.ksx)</button>
+        <hr>
+        <button role="menuitem" data-act="open-ksx">Abrir e executar um .ksx…</button>
+      </div>
+    </div>
+    <span id="proj-name" class="proj-name" tabindex="0" role="button" aria-label="Nome do projeto (Enter para renomear)" title="Clique para renomear o projeto">projeto</span>
+    <span class="sep">/</span>
+    <span id="file-name" class="file-name">—</span>
   </div>
+  <div class="actions" role="toolbar" aria-label="Montagem e execução">
+    <button id="btn-build" aria-label="Montar (Ctrl+B)" title="Montar o projeto (Ctrl+B)">Montar</button>
+    <button id="btn-run" class="primary" aria-label="Executar (F5)" title="Executar, remontando se preciso (F5)">▶ Executar</button>
+    <button id="btn-debug" aria-label="Depurar: parar na entrada" title="Montar, carregar e parar na primeira instrução">Depurar</button>
+    <button id="btn-stop" aria-label="Parar (Shift+F5)" title="Parar a VM (Shift+F5 ou Ctrl+Alt+C no terminal)">■ Parar</button>
+    <button id="btn-restart" aria-label="Reiniciar (Ctrl+Shift+F5)" title="Reiniciar (Ctrl+Shift+F5)">↻ Reiniciar</button>
+    <span class="tsep" aria-hidden="true"></span>
+    <button id="btn-continue" aria-label="Continuar (F5)" title="Continuar até o próximo breakpoint (F5/F8)">Continuar</button>
+    <button id="btn-step-over" aria-label="Passo (F10)" title="Passo por cima: call roda inteiro (F10)">Passo</button>
+    <button id="btn-step-into" aria-label="Passo-dentro (F11)" title="Passo para dentro: uma instrução (F11)">Passo-dentro</button>
+    <button id="btn-step-out" aria-label="Sair da função (Shift+F11)" title="Sair da função: até o ret correspondente (Shift+F11)">Sair</button>
+  </div>
+  <div class="tools">
+    <select id="examples" aria-label="Abrir um exemplo"><option value="">Exemplos…</option></select>
+    <button id="btn-import" aria-label="Importar arquivos" title="Importar .ksasm, .zip do projeto ou .ksx">Importar</button>
+    <button id="btn-export" aria-label="Exportar projeto (.zip)" title="Exportar o projeto como .zip">Exportar</button>
+    <button id="btn-options" aria-label="Opções" title="Opções da VM e do terminal">Opções</button>
+    <button id="btn-help" aria-label="Ajuda e atalhos (F1)" title="Atalhos e ajuda (F1)">?</button>
+  </div>
+  <input id="file" type="file" multiple accept=".ksasm,.asm,.s,.inc,.txt,.zip,.ksx" hidden>
+  <input id="file-ksx" type="file" accept=".ksx,application/octet-stream" hidden>
 </header>
 
-<details class="options">
-  <summary>Opções</summary>
-  <div class="opt-grid">
-    <label>Instruções por fatia <input id="opt-slice" type="number" min="1" value="200000" class="num"></label>
-    <label title="Substitui o stack_size da imagem (0 = o da imagem), como ksvm --stack">Pilha (bytes) <input id="opt-stack" type="number" min="0" value="0" class="num"></label>
-    <label>Teclado
-      <select id="opt-mode"><option value="line" selected>modo linha (eco local)</option><option value="raw">raw (cada tecla)</option></select></label>
-    <label>Backspace envia
-      <select id="opt-bs"><option value="del" selected>DEL (0x7F)</option><option value="bs">BS (0x08)</option></select></label>
-    <label title="GETC/GETS sem dado devolvem -1/AGAIN em vez de suspender a VM (ksvm --stdin-poll)"><input id="opt-poll" type="checkbox"> stdin não bloqueante (poll)</label>
-    <label><input id="opt-regs" type="checkbox"> registradores ao fim</label>
-    <label><input id="opt-autorun" type="checkbox" checked> executar ao carregar</label>
-    <label><input id="opt-clear" type="checkbox" checked> limpar terminal ao carregar</label>
-    <label><input id="opt-dbg-on-fault" type="checkbox" checked> abrir depurador em fault</label>
-    <label><input id="opt-fit" type="checkbox" checked> terminal ajustado à janela</label>
-    <label>Colunas <input id="opt-cols" type="number" min="20" max="400" value="80" class="num"></label>
-    <label>Linhas <input id="opt-rows" type="number" min="5" max="200" value="24" class="num"></label>
-  </div>
-</details>
-
-<main>
-  <section class="term-wrap">
-    <div class="term-head">
-      <span id="prog-name" class="prog">nenhum programa</span>
-      <span id="term-title" class="title"></span>
-      <span id="term-size" class="muted"></span>
-      <span id="status" class="status" data-state="idle">sem programa</span>
+<div id="workspace" class="workspace">
+  <aside id="pane-left" class="pane pane-left" aria-label="Explorador de arquivos">
+    <div class="pane-head">
+      <span class="pane-title">Arquivos</span>
+      <span class="pane-tools">
+        <button class="small icon" data-act="new-file" aria-label="Novo arquivo" title="Novo arquivo">＋</button>
+        <button class="small icon" data-act="import-files" aria-label="Importar arquivos" title="Importar arquivos do disco">⇪</button>
+        <button class="small icon collapse" data-collapse="left" aria-label="Recolher explorador" title="Recolher">«</button>
+      </span>
     </div>
-    <div id="term" aria-label="Terminal: saída do programa e entrada pelo teclado" role="textbox" aria-multiline="true"></div>
-    <div class="stdin-bar">
-      <span class="muted">stdin: <span id="mode-hint">linha (eco local)</span> · Ctrl+D = EOF · Ctrl+C envia 0x03 · Ctrl+Alt+C interrompe</span>
-      <button id="btn-eof" title="Fim da entrada">EOF</button>
-      <button id="stdin-file-btn" title="Enviar o conteúdo de um arquivo como entrada">Arquivo → stdin</button>
-      <label class="small"><input id="opt-stdin-eof" type="checkbox" checked> + EOF</label>
-      <input id="stdin-file" type="file" hidden>
-      <button id="btn-copy-all" title="Copiar todo o texto do terminal">Copiar tudo</button>
-      <button id="btn-clear" title="Limpar o terminal">Limpar</button>
-      <span id="insns" class="muted"></span>
-    </div>
-  </section>
-  <aside id="debugger" class="debugger" aria-label="Depurador" hidden></aside>
-</main>
+    <ul id="explorer" class="explorer" role="tree" aria-label="Arquivos do projeto"></ul>
+    <div id="explorer-foot" class="pane-foot muted small"></div>
+  </aside>
+  <div class="splitter sv" data-split="left" role="separator" aria-orientation="vertical" aria-label="Redimensionar explorador" tabindex="0"></div>
 
-<div id="drop" class="drop" hidden><div>Solte o arquivo .ksx para carregar</div></div>
+  <main class="center">
+    <section class="editor-area">
+      <div class="tabbar">
+        <div id="tabs" class="tabs" role="tablist" aria-label="Arquivos abertos"></div>
+        <button class="small icon" data-expand="left" aria-label="Mostrar explorador" title="Mostrar explorador" hidden>»</button>
+        <button class="small icon" data-expand="right" aria-label="Mostrar depurador" title="Mostrar depurador (Ctrl+F9)" hidden>«</button>
+      </div>
+      <div id="stale" class="banner" role="status" hidden>O fonte mudou depois da montagem: a imagem na VM está desatualizada. <button id="btn-stale-build" class="small">Remontar e reiniciar</button></div>
+      <div id="editor" class="editor"></div>
+      <div id="ksx-view" class="ksx-view" hidden>
+        <div class="ksx-head"><strong id="ksx-name"></strong> <span class="muted">imagem carregada sem fonte: desassembly do ksdis (clique numa instrução para breakpoint)</span></div>
+        <div id="ksx-dis" class="dis-list mono" role="listbox" aria-label="Desassembly da imagem"></div>
+      </div>
+      <div id="welcome" class="welcome" hidden></div>
+    </section>
+    <div class="splitter sh" data-split="bottom" role="separator" aria-orientation="horizontal" aria-label="Redimensionar painel inferior" tabindex="0"></div>
+    <section id="pane-bottom" class="pane pane-bottom">
+      <div class="ptabs" role="tablist" aria-label="Painéis">
+        <button role="tab" id="ptab-terminal" data-panel="terminal" aria-selected="true">Terminal</button>
+        <button role="tab" id="ptab-problems" data-panel="problems" aria-selected="false">Problemas <span id="problem-count" class="count">0</span></button>
+        <button role="tab" id="ptab-output" data-panel="output" aria-selected="false">Saída da montagem</button>
+        <button role="tab" id="ptab-disasm" data-panel="disasm" aria-selected="false">Desassembly</button>
+        <span class="ptabs-fill"></span>
+        <button class="small icon collapse" data-collapse="bottom" aria-label="Recolher painel" title="Recolher">▾</button>
+      </div>
+      <div id="panel-terminal" class="ppanel" role="tabpanel" aria-labelledby="ptab-terminal">
+        <div class="term-head">
+          <span id="prog-name" class="prog">nenhum programa</span>
+          <span id="term-title" class="title"></span>
+          <span id="term-size" class="muted"></span>
+          <span id="status" class="status" data-state="idle">sem programa</span>
+        </div>
+        <div id="term" aria-label="Terminal: saída do programa e entrada pelo teclado" role="textbox" aria-multiline="true"></div>
+        <div class="stdin-bar">
+          <span class="muted">stdin: <span id="mode-hint">linha (eco local)</span> · Ctrl+D = EOF · Ctrl+Alt+C interrompe</span>
+          <button id="btn-eof" class="small" title="Fim da entrada">EOF</button>
+          <button id="stdin-file-btn" class="small" title="Enviar o conteúdo de um arquivo como entrada">Arquivo → stdin</button>
+          <label class="small"><input id="opt-stdin-eof" type="checkbox" checked> + EOF</label>
+          <input id="stdin-file" type="file" hidden>
+          <button id="btn-copy-all" class="small" title="Copiar todo o texto do terminal">Copiar tudo</button>
+          <button id="btn-clear" class="small" title="Limpar o terminal">Limpar</button>
+          <span id="insns" class="muted"></span>
+        </div>
+      </div>
+      <div id="panel-problems" class="ppanel" role="tabpanel" aria-labelledby="ptab-problems" hidden>
+        <ul id="problems" class="problems" aria-label="Problemas da montagem"></ul>
+      </div>
+      <div id="panel-output" class="ppanel" role="tabpanel" aria-labelledby="ptab-output" hidden>
+        <pre id="asm-output" class="asm-output mono" tabindex="0">(monte o projeto: Ctrl+B)</pre>
+      </div>
+      <div id="panel-disasm" class="ppanel" role="tabpanel" aria-labelledby="ptab-disasm" hidden>
+        <div id="disasm" class="dis-list mono" role="listbox" aria-label="Desassembly (clique numa instrução para breakpoint)"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="splitter sv" data-split="right" role="separator" aria-orientation="vertical" aria-label="Redimensionar depurador" tabindex="0"></div>
+  <aside id="pane-right" class="pane pane-right" aria-label="Depurador">
+    <div class="pane-head">
+      <span class="pane-title">Depurador</span>
+      <span class="pane-tools"><button class="small icon collapse" data-collapse="right" aria-label="Recolher depurador" title="Recolher (Ctrl+F9)">»</button></span>
+    </div>
+    <div id="debugger" class="debugger"></div>
+  </aside>
+</div>
+
+<footer class="statusbar" role="status" aria-live="polite">
+  <span id="sb-state" class="sb-state" data-state="idle">sem programa</span>
+  <span id="sb-pc">pc —</span>
+  <span id="sb-insns">0 instr</span>
+  <span id="sb-msg" class="sb-msg"></span>
+  <span class="sb-fill"></span>
+  <span id="sb-pos">Ln 1, Col 1</span>
+  <span id="sb-file">—</span>
+  <span id="sb-size">—</span>
+  <span id="sb-store" class="muted"></span>
+</footer>
+
+<dialog id="dlg-options" aria-label="Opções">
+  <form method="dialog">
+    <h2>Opções</h2>
+    <div class="opt-grid">
+      <label title="RAM do guest">RAM
+        <select id="opt-ram">
+          <option value="64">64 KiB</option><option value="256">256 KiB</option>
+          <option value="1024" selected>1 MiB</option><option value="4096">4 MiB</option>
+          <option value="16384">16 MiB</option><option value="65536">64 MiB</option>
+        </select></label>
+      <label title="Limite de instruções (0 = sem limite), como ksvm --max-insns">Limite de instruções <input id="opt-limit" type="number" min="0" value="0" class="num"></label>
+      <label>Instruções por fatia <input id="opt-slice" type="number" min="1" value="200000" class="num"></label>
+      <label title="Substitui o stack_size da imagem (0 = o da imagem), como ksvm --stack">Pilha (bytes) <input id="opt-stack" type="number" min="0" value="0" class="num"></label>
+      <label>Teclado
+        <select id="opt-mode"><option value="line" selected>modo linha (eco local)</option><option value="raw">raw (cada tecla)</option></select></label>
+      <label>Backspace envia
+        <select id="opt-bs"><option value="del" selected>DEL (0x7F)</option><option value="bs">BS (0x08)</option></select></label>
+      <label title="GETC/GETS sem dado devolvem -1/AGAIN em vez de suspender a VM (ksvm --stdin-poll)"><input id="opt-poll" type="checkbox"> stdin não bloqueante (poll)</label>
+      <label title="ksas -g: todos os rótulos na tabela de símbolos do .ksx"><input id="opt-g" type="checkbox" checked> símbolos de depuração (-g)</label>
+      <label><input id="opt-lint" type="checkbox" checked> erros enquanto digita (lint)</label>
+      <label><input id="opt-regs" type="checkbox"> registradores ao fim</label>
+      <label><input id="opt-autorun" type="checkbox" checked> executar ao abrir exemplo/.ksx</label>
+      <label><input id="opt-clear" type="checkbox" checked> limpar terminal ao carregar</label>
+      <label><input id="opt-dbg-on-fault" type="checkbox" checked> mostrar o depurador em fault</label>
+      <label><input id="opt-fit" type="checkbox" checked> terminal ajustado ao painel</label>
+      <label>Colunas <input id="opt-cols" type="number" min="20" max="400" value="80" class="num"></label>
+      <label>Linhas <input id="opt-rows" type="number" min="5" max="200" value="24" class="num"></label>
+    </div>
+    <p class="dlg-actions"><button value="close" class="primary">Fechar</button></p>
+  </form>
+</dialog>
+
+<dialog id="dlg-help" aria-label="Ajuda e atalhos">
+  <form method="dialog">
+    <h2>Atalhos</h2>
+    <table class="keys">
+      <tr><th>F5</th><td>Executar (remonta se o fonte mudou) / continuar</td></tr>
+      <tr><th>Shift+F5</th><td>Parar</td></tr>
+      <tr><th>Ctrl+Shift+F5</th><td>Reiniciar</td></tr>
+      <tr><th>F8</th><td>Executar / parar (como no modo terminal)</td></tr>
+      <tr><th>F9</th><td>Liga/desliga breakpoint na linha do cursor (ou clique no gutter)</td></tr>
+      <tr><th>F10</th><td>Passo por cima (call/callr rodam inteiros)</td></tr>
+      <tr><th>F11</th><td>Passo para dentro (uma instrução)</td></tr>
+      <tr><th>Shift+F11</th><td>Sair da função (até o ret correspondente)</td></tr>
+      <tr><th>Ctrl+B</th><td>Montar</td></tr>
+      <tr><th>Ctrl+S</th><td>Salvar agora (o projeto também é salvo sozinho)</td></tr>
+      <tr><th>Ctrl+F</th><td>Buscar / substituir no arquivo</td></tr>
+      <tr><th>Ctrl+/</th><td>Comentar / descomentar linhas (<code>;</code>)</td></tr>
+      <tr><th>Ctrl+Espaço</th><td>Sugestões (instruções, registradores, rótulos)</td></tr>
+      <tr><th>Ctrl+F9</th><td>Mostrar/esconder o depurador</td></tr>
+      <tr><th>F1</th><td>Esta ajuda</td></tr>
+      <tr><th>Ctrl+Alt+C</th><td>Interromper a VM (no terminal)</td></tr>
+    </table>
+    <p class="small muted">No terminal em modo raw as teclas vão ao programa, exceto F8, F10, Ctrl+F9 e Ctrl+Alt+C.
+      F11 e Ctrl+Shift+F5 podem ser capturados pelo navegador em alguns sistemas: use os botões.
+      Arraste um <code>.ksx</code> para a página para executá-lo direto, ou arquivos <code>.ksasm</code>/<code>.zip</code> para importá-los.
+      Documentação: <code>docs/07-ide.md</code>.</p>
+    <p class="dlg-actions"><button value="close" class="primary">Fechar</button></p>
+  </form>
+</dialog>
+
+<div id="drop" class="drop" hidden><div>Solte um .ksx para executar, ou .ksasm/.zip para importar</div></div>
 
 <script src="vt.js"></script>
 <script src="input.js"></script>
@@ -81,6 +217,13 @@
 <script src="terminal.js"></script>
 <script src="debugger.js"></script>
 <script src="examples.js"></script>
+<script src="isa.js"></script>
+<script src="vendor/codemirror.bundle.js"></script>
+<script src="ksasm-lang.js"></script>
+<script src="asmtools.js"></script>
+<script src="project.js"></script>
+<script src="editor.js"></script>
+<script src="layout.js"></script>
 <script src="ksweb.js"></script>
 </body>
 </html>

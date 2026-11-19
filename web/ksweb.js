@@ -1,24 +1,70 @@
 /*
- * ksweb.js — controlador da página: carrega o wasm, cria o worker, liga
- * os controles, o terminal (terminal.js) e o depurador (debugger.js).
+ * ksweb.js — controlador da IDE: projeto e explorador, editor com abas,
+ * montagem/lint pelo worker do assembler (asm-worker.js: ksas.wasm e
+ * ksdis.wasm), execução e depuração em nível de fonte pelo worker da VM
+ * (worker.js: ksvm.wasm), terminal, painéis e barra de status.
  *
  * Duas formas de distribuição:
- *   dist/index.html        busca ksvm.wasm com fetch e cria worker.js
- *   dist/ksweb-single.html wasm em base64 (KSWEB_WASM_B64) e o código do
- *                          worker num <script type="text/js-worker">,
- *                          transformado em Blob: abre com clique duplo
+ *   dist/index.html        busca os .wasm com fetch e cria worker.js e
+ *                          asm-worker.js
+ *   dist/ksweb-single.html wasm em base64 (KSWEB_WASM_B64, KSWEB_KSAS_B64,
+ *                          KSWEB_KSDIS_B64) e o código dos workers em
+ *                          <script type="text/js-worker">: abre com clique duplo
+ *
+ * Modo simples: um .ksx (arrastado, aberto pelo menu ou exemplo) roda
+ * direto, com o desassembly do ksdis no lugar do editor.
  */
 (function () {
   'use strict';
-  /* global TerminalView, DebuggerPanel, KsFormat, parseSymbols, KSWEB_EXAMPLES, pageShortcut */
+  /* global TerminalView, DebuggerPanel, KsFormat, parseSymbols, KSWEB_EXAMPLES, KSWEB_ISA, pageShortcut,
+     ideShortcut, KsEditor, KsLayout, KsProject, KsasmLang, AsmTools */
   const $ = (s) => document.querySelector(s);
   const F = KsFormat;
+  const { Project, ProjectStore } = KsProject;
+  const hex8 = (v) => '0x' + F.hex(v >>> 0);
 
-  const state = {
-    worker: null, wasm: null, image: null, imageName: '', header: null,
-    vmState: 'idle', loaded: false, lastInfo: null, pendingRun: false, ready: false
+  const DEFAULT_MAIN = [
+    '; main.ksasm — um programa KSVM para começar.',
+    '; Ctrl+B monta, F5 executa, F9 marca breakpoint, F10/F11 avançam (F1: atalhos).',
+    '',
+    '        .text',
+    '        .global _start',
+    '_start:',
+    '        la      r1, msg',
+    '        call    puts            ; F11 entra, F10 passa por cima',
+    '        li      r1, 0',
+    '        halt',
+    '',
+    '; puts(r1 = string terminada em 0): escreve com a syscall PUTS',
+    'puts:',
+    '        mov     r5, r1',
+    'puts_len:',
+    '        ldb     r6, [r5]',
+    '        cmpi    r6, 0',
+    '        beq     puts_out',
+    '        inc     r5',
+    '        b       puts_len',
+    'puts_out:',
+    '        sub     r2, r5, r1      ; comprimento',
+    '        syscall PUTS            ; r1 = ponteiro, r2 = bytes',
+    '        ret',
+    '',
+    '        .data',
+    'msg:    .asciz  "Olá, KSVM!\\n"',
+    ''
+  ].join('\n');
+
+  const S = {
+    worker: null, wasm: null, ready: false,
+    asm: { worker: null, ready: false, seq: 0, pending: new Map(), ksas: null, ksdis: null },
+    store: null, project: null, version: 0,
+    lint: null, built: null, diags: new Map(), codeLines: new Map(),
+    image: null, imageName: '', imageSource: null, imageVersion: -1, header: null,
+    vmState: 'idle', loaded: false, pendingRun: false, stopAtEntry: false, debugSession: false,
+    ksxMode: false, disRows: [], disImage: null, pc: null, insns: 0, ips: 0,
+    memSeq: 2000000, memWait: new Map(), watches: [], saveTimer: null, lintTimer: null
   };
-  let term, dbg;
+  let term, dbg, editor, layout;
 
   /* ---- utilidades ---- */
 
@@ -28,103 +74,170 @@
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out;
   }
-
   const enc = new TextEncoder();
-
   function sys(text, kind) { term.writeSystem(text, kind); }
-
-  function send(msg, transfer) { if (state.worker) state.worker.postMessage(msg, transfer || []); }
-
+  function send(msg, transfer) { if (S.worker) S.worker.postMessage(msg, transfer || []); }
   function intVal(sel, def) {
     const v = parseInt($(sel).value, 10);
     return Number.isFinite(v) && v >= 0 ? v : def;
   }
-
   function runOpts() {
     return {
-      ramSize: intVal('#opt-ram', 1024) * 1024,
-      stackSize: intVal('#opt-stack', 0),
-      maxInsns: intVal('#opt-limit', 0),
-      slice: Math.max(1, intVal('#opt-slice', 200000)),
-      stdinBlock: !$('#opt-poll').checked
+      ramSize: intVal('#opt-ram', 1024) * 1024, stackSize: intVal('#opt-stack', 0), maxInsns: intVal('#opt-limit', 0),
+      slice: Math.max(1, intVal('#opt-slice', 200000)), stdinBlock: !$('#opt-poll').checked
     };
   }
+  function h(tag, attrs, ...kids) {
+    const e = document.createElement(tag);
+    for (const k in attrs || {}) {
+      if (k === 'class') e.className = attrs[k];
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), attrs[k]);
+      else if (attrs[k] !== false && attrs[k] !== null && attrs[k] !== undefined) e.setAttribute(k, attrs[k]);
+    }
+    for (const c of kids) if (c !== null && c !== undefined) e.append(c);
+    return e;
+  }
+  let msgTimer = null;
+  function status(text, sticky) {
+    $('#sb-msg').textContent = text;
+    clearTimeout(msgTimer);
+    if (!sticky) msgTimer = setTimeout(() => { $('#sb-msg').textContent = ''; }, 8000);
+  }
+  function download(name, data, type) {
+    const url = URL.createObjectURL(new Blob([data], { type: type || 'text/plain' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+  function readFile(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(new Uint8Array(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsArrayBuffer(file);
+    });
+  }
+  const fmtIps = (ips) => (ips >= 1e6 ? (ips / 1e6).toFixed(1) + ' M instr/s' : ips.toLocaleString('pt-BR') + ' instr/s');
 
-  /* ---- estado e botões ---- */
+  /* ---- estado da VM e botões ---- */
 
   const STATE_TEXT = {
     idle: 'sem programa', ready: 'pronto', running: 'executando', sleeping: 'executando (SLEEP)',
-    waiting: 'esperando entrada', paused: 'pausado', break: 'parado (depurador)', done: 'terminou', error: 'erro'
+    waiting: 'esperando entrada', paused: 'pausado', break: 'parado', done: 'terminou', error: 'erro'
   };
+  const isActive = () => ['running', 'sleeping', 'waiting'].includes(S.vmState);
+  const isStopped = () => S.loaded && ['ready', 'paused', 'break'].includes(S.vmState);
 
   function setState(s, extra) {
-    state.vmState = s;
-    const badge = $('#status');
-    badge.textContent = STATE_TEXT[s] + (extra ? ' — ' + extra : '');
-    badge.dataset.state = s;
-    const canRun = state.loaded && ['ready', 'paused', 'break'].includes(s);
-    const active = ['running', 'sleeping', 'waiting'].includes(s);
-    $('#btn-run').disabled = !(canRun || (state.loaded && s === 'done'));
-    $('#btn-run').textContent = s === 'paused' || s === 'break' ? 'Continuar' : 'Executar';
-    $('#btn-stop').disabled = !active;
-    $('#btn-restart').disabled = !state.image;
-    $('#btn-step').disabled = !(state.loaded && (canRun || s === 'waiting'));
-    $('#btn-eof').disabled = !state.loaded;
-    $('#stdin-file-btn').disabled = !state.loaded;
-    document.body.classList.toggle('waiting-input', s === 'waiting');
-  }
-
-  /* ---- worker ---- */
-
-  function createWorker() {
-    const src = document.getElementById('ksweb-worker-src');
-    if (src) {
-      const url = URL.createObjectURL(new Blob([src.textContent], { type: 'text/javascript' }));
-      return new Worker(url);
+    S.vmState = s;
+    for (const b of [$('#status'), $('#sb-state')]) {
+      b.textContent = STATE_TEXT[s] + (extra ? ' — ' + extra : '');
+      b.dataset.state = s;
     }
-    return new Worker('worker.js');
+    const hasProg = !!(S.project && S.project.main) || S.imageSource === 'ksx';
+    $('#btn-run').disabled = isActive() || !(hasProg || S.image);
+    $('#btn-debug').disabled = isActive() || !hasProg && !S.image;
+    $('#btn-build').disabled = !S.asm.ready || !(S.project && S.project.main);
+    $('#btn-stop').disabled = !isActive();
+    $('#btn-restart').disabled = !S.image && !hasProg;
+    $('#btn-continue').disabled = !isStopped();
+    $('#btn-step-over').disabled = isActive() || !(hasProg || S.image);
+    $('#btn-step-into').disabled = isActive() || !(hasProg || S.image);
+    $('#btn-step-out').disabled = !isStopped();
+    $('#btn-eof').disabled = !S.loaded;
+    $('#stdin-file-btn').disabled = !S.loaded;
+    document.body.classList.toggle('waiting-input', s === 'waiting');
+    if (isActive()) editor.setDebugLine(null, null);
+    updateStale();
   }
 
-  async function loadWasm() {
-    if (typeof window.KSWEB_WASM_B64 === 'string') return b64ToBytes(window.KSWEB_WASM_B64);
-    const r = await fetch('ksvm.wasm');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+  function updateStale() {
+    const stale = S.loaded && S.imageSource === 'build' && S.imageVersion !== S.version && S.vmState !== 'done';
+    $('#stale').hidden = !stale;
+  }
+
+  function updateStatusBar() {
+    $('#sb-pc').textContent = 'pc ' + (S.pc === null ? '—' : hex8(S.pc));
+    $('#sb-insns').textContent = S.insns.toLocaleString('pt-BR') + ' instr' + (S.ips && isActive() ? ' · ' + fmtIps(S.ips) : '');
+    $('#sb-size').textContent = S.image ? 'imagem ' + S.image.length + ' B' : '—';
+  }
+
+  /* ---- workers ---- */
+
+  function createWorker(srcId, file) {
+    const src = document.getElementById(srcId);
+    if (src) return new Worker(URL.createObjectURL(new Blob([src.textContent], { type: 'text/javascript' })));
+    return new Worker(file);
+  }
+
+  async function loadBytes(file, b64name) {
+    if (typeof window[b64name] === 'string') return b64ToBytes(window[b64name]);
+    const r = await fetch(file);
+    if (!r.ok) throw new Error(file + ': HTTP ' + r.status);
     return new Uint8Array(await r.arrayBuffer());
   }
 
   async function boot() {
     try {
-      state.wasm = await loadWasm();
+      [S.wasm, S.asm.ksas, S.asm.ksdis] = await Promise.all([
+        loadBytes('ksvm.wasm', 'KSWEB_WASM_B64'), loadBytes('ksas.wasm', 'KSWEB_KSAS_B64'), loadBytes('ksdis.wasm', 'KSWEB_KSDIS_B64')]);
     } catch (e) {
-      sys('não consegui carregar ksvm.wasm (' + e.message + ').', 'error');
-      if (location.protocol === 'file:') {
-        sys('Abrindo por file://, o navegador bloqueia fetch: use ksweb-single.html ou "make serve".', 'error');
-      }
+      sys('não consegui carregar os módulos wasm (' + e.message + ').', 'error');
+      if (location.protocol === 'file:') sys('Abrindo por file://, o navegador bloqueia fetch: use ksweb-single.html ou "make serve".', 'error');
       setState('error');
       return;
     }
     try {
-      state.worker = createWorker();
+      S.worker = createWorker('ksweb-worker-src', 'worker.js');
+      S.asm.worker = createWorker('ksweb-asm-worker-src', 'asm-worker.js');
     } catch (e) {
-      sys('não consegui criar o Web Worker (' + e.message + '). Use ksweb-single.html ou "make serve".', 'error');
+      sys('não consegui criar os Web Workers (' + e.message + '). Use ksweb-single.html ou "make serve".', 'error');
       setState('error');
       return;
     }
-    state.worker.onmessage = (ev) => onWorker(ev.data);
-    state.worker.onerror = (ev) => { sys('erro no worker: ' + (ev.message || ev), 'error'); setState('error'); };
-    const copy = state.wasm.slice();
-    send({ type: 'init', wasm: copy.buffer }, [copy.buffer]);
+    S.worker.onmessage = (ev) => onWorker(ev.data);
+    S.worker.onerror = (ev) => { sys('erro no worker da VM: ' + (ev.message || ev), 'error'); setState('error'); };
+    S.asm.worker.onmessage = (ev) => onAsm(ev.data);
+    S.asm.worker.onerror = (ev) => { sys('erro no worker do assembler: ' + (ev.message || ev), 'error'); };
+    const w = S.wasm.slice();
+    send({ type: 'init', wasm: w.buffer }, [w.buffer]);
+    const a = S.asm.ksas.slice(), d = S.asm.ksdis.slice();
+    S.asm.worker.postMessage({ type: 'init', ksas: a.buffer, ksdis: d.buffer, isa: typeof KSWEB_ISA !== 'undefined' ? KSWEB_ISA : null }, [a.buffer, d.buffer]);
+  }
+
+  function asmCall(msg) {
+    return new Promise((resolve) => {
+      const id = ++S.asm.seq;
+      S.asm.pending.set(id, resolve);
+      S.asm.worker.postMessage(Object.assign({ id }, msg));
+    });
+  }
+
+  function onAsm(m) {
+    if (m.type === 'ready') {
+      S.asm.ready = true;
+      status('assembler pronto (ksas.wasm ' + S.asm.ksas.length + ' B, ksdis.wasm ' + S.asm.ksdis.length + ' B)');
+      setState(S.vmState);
+      scheduleLint(0);
+      return;
+    }
+    if (m.type === 'fatal') { sys(m.message, 'error'); return; }
+    const res = S.asm.pending.get(m.id);
+    if (res) { S.asm.pending.delete(m.id); res(m); }
   }
 
   function onWorker(m) {
     switch (m.type) {
       case 'ready':
-        state.ready = true;
+        S.ready = true;
         $('#version').textContent = 'KSVM ' + m.version;
-        sys('KSVM ' + m.version + ' em WebAssembly (' + state.wasm.length + ' bytes). Carregue um .ksx (botão, arrastar e soltar ou exemplo).');
-        sendDebug();
-        setState('idle');
-        if (state.image) loadImage(state.image, state.imageName, state.pendingRun);
+        sys('KSVM ' + m.version + ' em WebAssembly. Edite e monte (Ctrl+B), execute (F5) ou arraste um .ksx.');
+        dbg.sync();
+        setState(S.loaded ? S.vmState : 'idle');
+        if (S.image && S.pendingLoad) { S.pendingLoad = false; loadImage(S.image, S.imageName, S.pendingRun); }
         break;
       case 'fatal':
         sys('erro no worker: ' + m.message, 'error');
@@ -132,17 +245,22 @@
         break;
       case 'loaded':
         if (!m.ok) {
-          state.loaded = false;
-          sys(state.imageName + ': ' + m.info.message + ' (código ' + m.info.code + ')', 'error');
+          S.loaded = false;
+          sys(S.imageName + ': ' + m.info.message + ' (código ' + m.info.code + ')', 'error');
           setState('done', 'código ' + m.info.code);
           break;
         }
-        state.loaded = true;
-        state.header = m.header;
-        for (const l of F.headerLines(m.header, state.imageName)) sys(l);
-        dbg.setImage(m.header, m.regions, parseSymbols(state.image, m.header.symOff, m.header.symSize));
+        S.loaded = true;
+        S.header = m.header;
+        S.insns = 0;
+        S.pc = m.header.entry;
+        for (const l of F.headerLines(m.header, S.imageName)) sys(l);
+        dbg.setImage(m.header, m.regions, parseSymbols(S.image, m.header.symOff, m.header.symSize));
+        dbg.sync();
         setState('ready');
-        if (state.pendingRun) { state.pendingRun = false; run(); }
+        updateStatusBar();
+        if (S.pendingRun) { S.pendingRun = false; send({ type: 'run', slice: runOpts().slice }); }
+        else if (S.stopAtEntry) { dbg.reason('parado na entrada ' + hex8(m.header.entry)); send({ type: 'snapshot' }); }
         break;
       case 'output':
         term.write(m.bytes);
@@ -151,21 +269,28 @@
         onStatus(m);
         break;
       case 'progress':
+        S.insns = m.insns; S.ips = m.ips;
         dbg.stats(m.insns, m.ips);
         $('#insns').textContent = m.insns.toLocaleString('pt-BR') + ' instr' + (m.ips ? ' · ' + fmtIps(m.ips) : '');
+        updateStatusBar();
         break;
       case 'snapshot':
         dbg.snapshot(m);
+        S.pc = m.cpu.pc;
+        S.insns = m.insns;
+        updateStatusBar();
+        if (S.vmState === 'done') { if (m.fault) showPc(m.fault.pc, true); }
+        else if (!isActive()) showPc(m.cpu.pc, !!m.fault);
+        else if (S.vmState === 'waiting') showPc(m.cpu.pc, false, true);
         break;
       case 'stepped':
-        if (!dbg.open) {
-          sys('passo: 0x' + F.hex(m.pc) + '  ' + m.text);
-          sys(F.regsDump(m.cpu).replace(/\n$/, ''));
-        }
+        S.pc = m.cpu.pc;
         break;
-      case 'mem':
-        dbg.memData(m);
+      case 'mem': {
+        const w = S.memWait.get(m.id);
+        if (w) { S.memWait.delete(m.id); w(m); } else dbg.memData(m);
         break;
+      }
       case 'trace-text':
         download('trace.txt', m.text);
         sys('trace exportado: ' + m.count + ' registros' + (m.total > m.count ? ' (os últimos de ' + m.total + ')' : ''));
@@ -175,120 +300,871 @@
     }
   }
 
-  function fmtIps(ips) {
-    return ips >= 1e6 ? (ips / 1e6).toFixed(1) + ' M instr/s' : ips.toLocaleString('pt-BR') + ' instr/s';
-  }
-
   function onStatus(m) {
+    if (m.pc !== undefined) S.pc = m.pc;
+    if (m.insns !== undefined) S.insns = m.insns;
+    updateStatusBar();
     if (m.state === 'done') {
       const info = m.info;
-      state.lastInfo = info;
-      if (info.kind === 'fault') {
-        sys(info.message, 'error');
-        sys('instrução: ' + (m.cpu ? '0x' + F.hex(info.fault.pc) : '') + (dbg.open ? ' (destacada no depurador)' : ''), 'error');
-      } else if (info.kind === 'limit') {
-        sys(info.message, 'error');
-      }
-      sys('fim: código de saída ' + info.code + ' · ' + m.insns.toLocaleString('pt-BR') + ' instruções',
-        info.code === 0 ? 'ok' : 'error');
+      if (info.kind === 'fault') sys(info.message, 'error');
+      else if (info.kind === 'limit') sys(info.message, 'error');
+      sys('fim: código de saída ' + info.code + ' · ' + m.insns.toLocaleString('pt-BR') + ' instruções', info.code === 0 ? 'ok' : 'error');
       if ($('#opt-regs').checked && m.cpu) sys(F.regsDump(m.cpu).replace(/\n$/, ''));
       setState('done', 'código ' + info.code);
-      if (info.kind === 'fault' && $('#opt-dbg-on-fault').checked && !dbg.open) toggleDebugger(true);
+      if (info.kind === 'fault') {
+        if ($('#opt-dbg-on-fault').checked) layout.collapse('right', false);
+        showPc(info.fault ? info.fault.pc : m.pc, true);
+      } else {
+        editor.setDebugLine(null, null);
+        renderDisasmPc(null);
+      }
       return;
     }
     if (m.state === 'break') {
-      dbg.reason('parado: ' + m.reason + ' em 0x' + F.hex(m.pc));
-      setState('break', m.reason + ' em 0x' + F.hex(m.pc));
+      const why = m.reason === 'step' ? 'passo' : m.reason;
+      dbg.reason('parado: ' + why + ' em ' + hex8(m.pc));
+      setState('break', why + ' em ' + hex8(m.pc));
       return;
     }
-    if (m.state === 'paused') dbg.reason('pausado em 0x' + F.hex(m.pc));
-    if (m.state === 'running' || m.state === 'waiting') dbg.reason('');
+    if (m.state === 'paused') dbg.reason('pausado em ' + hex8(m.pc));
+    if (m.state === 'running' || m.state === 'waiting') dbg.reason(m.stepping ? (m.stepping === 'out' ? 'saindo da função…' : 'passo por cima…') : '');
     setState(m.state);
-    if (m.state === 'waiting') term.el.focus({ preventScroll: true });
+    if (m.state === 'waiting') {
+      layout.showPanel('terminal');
+      term.el.focus({ preventScroll: true });
+    }
   }
 
-  function download(name, text) {
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  /* ---- linha atual da depuração ---- */
+
+  function currentInfo() {
+    return S.imageSource === 'build' && S.built ? S.built.result.info : null;
   }
 
-  /* ---- ações ---- */
+  function showPc(pc, fault, quiet) {
+    S.pc = pc;
+    updateStatusBar();
+    renderDisasmPc(pc);
+    const info = currentInfo();
+    const loc = info && info.addrLine.get(pc >>> 0);
+    if (loc && S.project.has(loc.file) && !S.ksxMode) {
+      openTab(loc.file);
+      editor.setDebugLine(loc.file, loc.line);
+      if (!quiet) status((fault ? 'fault em ' : 'parado em ') + loc.file + ':' + loc.line + ' (' + hex8(pc) + ')');
+    } else {
+      editor.setDebugLine(null, null);
+      if (S.loaded && !S.ksxMode && !quiet) layout.showPanel('disasm');
+    }
+  }
+
+  /* ---- montagem e lint ---- */
+
+  function projectFiles() {
+    return S.project.fileNames().map((n) => [n, S.project.text(n)]);
+  }
+
+  async function assemble(main) {
+    const m = await asmCall({ type: 'assemble', files: projectFiles(), main: main || S.project.main, debug: $('#opt-g').checked });
+    return m.result;
+  }
+
+  function scheduleLint(ms) {
+    clearTimeout(S.lintTimer);
+    if (!$('#opt-lint').checked && ms !== 0) return;
+    S.lintTimer = setTimeout(runLint, ms === undefined ? 300 : ms);
+  }
+
+  async function runLint() {
+    if (!S.asm.ready || !S.project || !S.project.main) { applyDiagnostics(null); return; }
+    const v = S.version, proj = S.project;
+    const r = await assemble();
+    if (v !== S.version || proj !== S.project) return;
+    S.lint = { result: r, version: v };
+    let extra = [];
+    /* arquivo ativo fora da montagem do principal (ex.: biblioteca sem
+     * .include no principal): monta-o sozinho para o lint */
+    const act = editor.active;
+    const covered = (r.info && r.info.files.includes(act)) || r.diagnostics.some((d) => d.file === act);
+    if (act && act !== proj.main && !covered && /\.(ksasm|asm|s|inc)$/i.test(act)) {
+      const r2 = await assemble(act);
+      if (v !== S.version || proj !== S.project) return;
+      extra = r2.diagnostics.filter((d) => d.file === act);
+    }
+    applyDiagnostics(r, extra);
+    if (r.ok) applyCodeLines(r.info);
+  }
+
+  function applyDiagnostics(r, extra) {
+    const all = r ? r.diagnostics.concat(extra || []) : [];
+    const byFile = new Map();
+    for (const d of all) {
+      if (d.severity === 'info') continue;
+      const f = d.file && S.project.has(d.file) ? d.file : null;
+      if (!f) continue;
+      if (!byFile.has(f)) byFile.set(f, []);
+      byFile.get(f).push(d);
+    }
+    for (const n of S.project.fileNames()) {
+      const list = byFile.get(n) || [];
+      const had = S.diags.get(n);
+      if ((had && had.length) || list.length) editor.setDiagnostics(n, list);
+      S.diags.set(n, list);
+    }
+    renderProblems(all);
+    renderExplorer();
+  }
+
+  function applyCodeLines(info) {
+    S.codeLines = new Map();
+    for (const n of S.project.fileNames()) {
+      const lines = info.code.get(n) || [];
+      const list = lines.map((l) => ({ line: l, addr: info.lines.get(n + '\n' + l).addr }));
+      S.codeLines.set(n, list);
+      editor.setCodeLines(n, list);
+    }
+  }
+
+  function renderProblems(all) {
+    const ul = $('#problems');
+    ul.textContent = '';
+    const errs = all.filter((d) => d.severity !== 'info');
+    for (const d of errs) {
+      const loc = d.file ? d.file + (d.line ? ':' + d.line + (d.col ? ':' + d.col : '') : '') : 'ksas';
+      const li = h('li', { tabindex: '0', title: d.text || d.message },
+        h('span', { class: 'sev' }, '✖'), h('span', { class: 'loc' }, loc), h('span', {}, d.message));
+      const go = () => {
+        if (d.file && S.project.has(d.file)) {
+          openTab(d.file);
+          const ln = editor.view.state.doc.line(Math.max(1, Math.min(d.line || 1, editor.view.state.doc.lines)));
+          editor.gotoLine(d.file, d.line || 1, d.col ? AsmTools.byteColToChar(ln.text, d.col) + 1 : 1);
+        }
+      };
+      li.addEventListener('click', go);
+      li.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+      ul.append(li);
+    }
+    if (!errs.length) ul.append(h('li', { class: 'empty' }, all.length || S.lint ? 'Nenhum problema.' : 'Monte o projeto para ver os problemas.'));
+    const c = $('#problem-count');
+    c.textContent = String(errs.length);
+    c.classList.toggle('err', errs.length > 0);
+  }
+
+  async function build(quiet) {
+    if (!S.asm.ready) { status('o assembler ainda está carregando…'); return null; }
+    if (!S.project.main) { status('o projeto não tem arquivo principal'); return null; }
+    clearTimeout(S.lintTimer);
+    const v = S.version;
+    const r = S.lint && S.lint.version === v && S.lint.result.ok ? S.lint.result : await assemble();
+    if (v !== S.version) return build(quiet);
+    S.lint = { result: r, version: v };
+    applyDiagnostics(r);
+    if (!r.ok) {
+      const n = r.diagnostics.filter((d) => d.severity !== 'info').length;
+      status('montagem falhou: ' + n + ' erro(s)', true);
+      layout.showPanel('problems');
+      return null;
+    }
+    applyCodeLines(r.info);
+    S.built = { result: r, version: v };
+    $('#asm-output').textContent = r.listingText || '(listing vazio)';
+    resolveBreakpoints(true);
+    disassembleImage(r.image);
+    status('montado: ' + S.project.main + ' → ' + r.image.length + ' bytes em ' + Math.max(1, Math.round(r.ms)) + ' ms' + (quiet ? '' : ' (Saída da montagem e Desassembly atualizados)'));
+    return r;
+  }
+
+  async function disassembleImage(image) {
+    S.disImage = image;
+    const m = await asmCall({ type: 'disassemble', image: image.slice().buffer });
+    if (S.disImage !== image) return;
+    S.disRows = m.ok ? m.rows : [{ text: m.stderr || 'ksdis falhou', addr: null }];
+    renderDisasm();
+  }
+
+  /* ---- desassembly (painel inferior e modo .ksx) ---- */
+
+  function renderDisasmInto(box) {
+    box.textContent = '';
+    const frag = document.createDocumentFragment();
+    for (const r of S.disRows) {
+      const bp = r.code && dbg.hasBp(r.addr);
+      const cls = 'dr' + (r.code ? ' code' : '') + (r.label ? ' lbl' : '') + (/^;/.test(r.text) ? ' hdr' : '');
+      const d = h('div', { class: cls }, h('span', { class: 'dot' }, bp ? '●' : ' '), r.text);
+      if (r.code) {
+        d.dataset.addr = String(r.addr);
+        d.addEventListener('click', () => { dbg.toggleBp(r.addr); renderDisasm(); });
+      }
+      frag.append(d);
+    }
+    box.append(frag);
+  }
+
+  function renderDisasm() {
+    renderDisasmInto($('#disasm'));
+    if (S.ksxMode) renderDisasmInto($('#ksx-dis'));
+    renderDisasmPc(S.loaded && !isActive() ? S.pc : null);
+  }
+
+  function renderDisasmPc(pc) {
+    for (const box of [$('#disasm'), $('#ksx-dis')]) {
+      for (const e of box.querySelectorAll('.dr.cur')) e.classList.remove('cur');
+      if (pc === null || pc === undefined) continue;
+      const row = box.querySelector('.dr.code[data-addr="' + (pc >>> 0) + '"]');
+      if (row) {
+        row.classList.add('cur');
+        if (box.offsetParent) box.scrollTop = row.offsetTop - box.clientHeight / 2;
+      }
+    }
+  }
+
+  /* ---- breakpoints ---- */
+
+  /* [{file, line, addr, moved}] dos breakpoints de fonte, resolvidos pelo
+   * mapa linha <-> endereço da última montagem carregável. */
+  function breakpointList() {
+    if (!S.project) return [];
+    const out = [];
+    const info = S.built ? S.built.result.info : null;
+    for (const [file, lines] of S.project.breakpoints) {
+      for (const line of lines) {
+        const r = info ? AsmTools.resolveBreakpoint(info, file, line) : null;
+        out.push({ file, line, addr: r ? r.addr : null, moved: S.bpMoved && S.bpMoved.get(file + ':' + line) });
+      }
+    }
+    return out;
+  }
+
+  /* Linhas sem código: o breakpoint vai para a próxima linha com código. */
+  function resolveBreakpoints(move) {
+    if (move && S.built && S.built.version === S.version) {
+      const info = S.built.result.info;
+      for (const [file, lines] of [...S.project.breakpoints]) {
+        const next = [];
+        let changed = false;
+        for (const line of lines) {
+          const r = AsmTools.resolveBreakpoint(info, file, line);
+          if (r && r.moved) {
+            changed = true;
+            next.push(r.line);
+            S.bpMoved.set(file + ':' + r.line, line);
+            status('breakpoint movido de ' + file + ':' + line + ' para a linha ' + r.line + ' (a linha ' + line + ' não gera código)');
+          } else next.push(line);
+        }
+        if (changed) {
+          S.project.setBreakpoints(file, next);
+          editor.setBreakpoints(file, S.project.breakpoints.get(file) || []);
+          scheduleSave();
+        }
+      }
+    }
+    dbg.sync();
+    if (S.disRows.length) renderDisasm();
+  }
+
+  function onEditorBreakpoints(file, lines) {
+    const old = S.project.breakpoints.get(file) || [];
+    for (const l of lines) if (!old.includes(l)) S.bpMoved.delete(file + ':' + l);
+    S.project.setBreakpoints(file, lines);
+    scheduleSave();
+    resolveBreakpoints(true);
+  }
+
+  function addAddrBreakpoint(addr) {
+    const info = currentInfo();
+    const loc = info && info.addrLine.get(addr >>> 0);
+    if (loc && S.project.has(loc.file)) {
+      const lines = (S.project.breakpoints.get(loc.file) || []).concat([loc.line]);
+      S.project.setBreakpoints(loc.file, lines);
+      editor.setBreakpoints(loc.file, S.project.breakpoints.get(loc.file));
+      scheduleSave();
+      return;
+    }
+    dbg.bps.add(addr >>> 0);
+  }
+
+  function removeBreakpoint(b) {
+    if (!b.file) { dbg.bps.delete(b.addr); return; }
+    const lines = (S.project.breakpoints.get(b.file) || []).filter((l) => l !== b.line);
+    S.project.setBreakpoints(b.file, lines);
+    editor.setBreakpoints(b.file, lines);
+    scheduleSave();
+  }
+
+  function clearBreakpoints() {
+    for (const f of [...S.project.breakpoints.keys()]) { S.project.setBreakpoints(f, []); editor.setBreakpoints(f, []); }
+    scheduleSave();
+  }
+
+  /* ---- execução ---- */
 
   function loadImage(bytes, name, autoRun) {
-    state.image = bytes;
-    state.imageName = name;
-    state.loaded = false;
-    state.pendingRun = !!autoRun;
+    S.image = bytes;
+    S.imageName = name;
+    S.loaded = false;
+    S.pendingRun = !!autoRun;
     $('#prog-name').textContent = name;
-    if (!state.worker || !state.ready) return;       /* o 'ready' carrega state.image */
+    updateStatusBar();
+    if (!S.worker || !S.ready) { S.pendingLoad = true; return; }
     sys('carregando ' + name + ' (' + bytes.length + ' bytes)');
     const copy = bytes.slice();
     send({ type: 'load', image: copy.buffer, opts: runOpts() }, [copy.buffer]);
   }
 
+  async function startProgram(stopAtEntry) {
+    S.debugSession = stopAtEntry;
+    S.stopAtEntry = stopAtEntry;
+    if (S.ksxMode && S.imageSource === 'ksx') {
+      if ($('#opt-clear').checked) term.clear();
+      layout.showPanel('terminal');
+      loadImage(S.image, S.imageName, !stopAtEntry);
+      return;
+    }
+    const r = S.built && S.built.version === S.version ? S.built.result : await build(true);
+    if (!r) return;
+    S.imageSource = 'build';
+    S.imageVersion = S.built.version;
+    if ($('#opt-clear').checked) term.clear();
+    if (stopAtEntry) layout.collapse('right', false);
+    else layout.showPanel('terminal');
+    loadImage(r.image, S.project.main.replace(/\.[^./]*$/, '') + '.ksx', !stopAtEntry);
+  }
+
   function run() {
-    if (!state.loaded) return;
-    if (state.vmState === 'done') { restart(true); return; }
+    if (isStopped() && S.vmState !== 'ready') { cont(); return; }
+    if (isStopped() && S.vmState === 'ready' && S.imageSource && (S.imageSource === 'ksx' || S.imageVersion === S.version)) { cont(); return; }
+    if (isActive()) return;
+    startProgram(false);
+  }
+  function cont() {
+    if (!isStopped()) return;
+    layout.showPanel('terminal');
     term.el.focus({ preventScroll: true });
+    editor.setDebugLine(null, null);
     send({ type: 'run', slice: runOpts().slice });
   }
-
-  function pause() { send({ type: 'pause' }); }
-
-  function step(n) {
-    if (!state.loaded || state.vmState === 'done') return;
-    send({ type: 'step', n: n || 1 });
+  function pause() { if (isActive()) send({ type: 'pause' }); }
+  function debugStart() { if (!isActive()) startProgram(true); }
+  function restart() { if (isActive()) send({ type: 'pause' }); startProgram(S.debugSession); }
+  function stepMode(mode) {
+    if (!S.loaded || S.vmState === 'done' || S.vmState === 'idle') { startProgram(true); return; }
+    if (isActive() && S.vmState !== 'waiting') return;
+    send({ type: 'step', mode, n: 1 });
   }
-
-  function restart(autoRun) {
-    if (!state.image) return;
-    if ($('#opt-clear').checked) term.clear();
-    loadImage(state.image, state.imageName, autoRun);
-  }
+  function stepN(n) { if (S.loaded && S.vmState !== 'done') send({ type: 'step', n }); }
 
   function sendInput(str) {
-    if (!state.loaded) return;
+    if (!S.loaded) return;
     const b = enc.encode(str);
     send({ type: 'input', bytes: b.buffer }, [b.buffer]);
   }
+  function sendEof() { if (S.loaded) send({ type: 'eof' }); }
 
-  function sendEof() {
-    if (!state.loaded) return;
-    send({ type: 'eof' });
-  }
-
-  function sendDebug() { send({ type: 'debug', debug: dbg.config() }); }
-
-  function toggleDebugger(on) {
-    const open = on === undefined ? !dbg.open : on;
-    dbg.setOpen(open);
-    document.body.classList.toggle('dbg-open', open);
-    $('#btn-dbg').setAttribute('aria-pressed', open ? 'true' : 'false');
-    if (open && state.loaded) send({ type: 'snapshot' });
-    setTimeout(() => term.fitToContainer(), 0);
-  }
-
-  function readFile(file) {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(new Uint8Array(r.result));
-      r.onerror = () => reject(r.error);
-      r.readAsArrayBuffer(file);
+  function memRead(addr, len) {
+    return new Promise((resolve) => {
+      const id = ++S.memSeq;
+      S.memWait.set(id, resolve);
+      send({ type: 'mem', addr: addr >>> 0, len, id });
+      setTimeout(() => { if (S.memWait.delete(id)) resolve(null); }, 1500);
     });
   }
 
-  async function openFile(file) {
+  /* ---- modo simples: .ksx sem fonte ---- */
+
+  function openKsx(bytes, name) {
+    S.ksxMode = true;
+    S.imageSource = 'ksx';
+    S.image = bytes;
+    S.imageName = name;
+    S.debugSession = false;
+    S.stopAtEntry = false;
+    $('#editor').hidden = true;
+    $('#ksx-view').hidden = false;
+    $('#ksx-name').textContent = name;
+    $('#file-name').textContent = name;
+    $('#sb-file').textContent = name;
+    renderTabs();
+    renderExplorer();
+    editor.setDebugLine(null, null);
+    if ($('#opt-clear').checked) term.clear();
+    layout.showPanel('terminal');
+    disassembleImage(bytes);
+    loadImage(bytes, name, $('#opt-autorun').checked);
+  }
+
+  function leaveKsx() {
+    if (!S.ksxMode) return;
+    S.ksxMode = false;
+    $('#editor').hidden = false;
+    $('#ksx-view').hidden = true;
+    if (S.built) disassembleImage(S.built.result.image);
+  }
+
+  /* ---- projeto, explorador e abas ---- */
+
+  function scheduleSave(now) {
+    clearTimeout(S.saveTimer);
+    const doSave = async () => {
+      try {
+        await S.store.save(S.project);
+        await S.store.setMeta('last', S.project.id);
+        if (now) status('projeto salvo (' + S.store.kind + ')');
+      } catch (e) { status('não consegui salvar: ' + e.message, true); }
+    };
+    if (now) return doSave();
+    S.saveTimer = setTimeout(doSave, 400);
+    return null;
+  }
+
+  function onEdit(name, text) {
+    if (!S.project.has(name)) return;
+    if (S.project.setText(name, text)) {
+      S.version++;
+      scheduleSave();
+      scheduleLint();
+      updateStale();
+    }
+  }
+
+  function setProject(p) {
+    for (const n of [...editor.states.keys()]) editor.forget(n);
+    editor.deactivate();
+    S.project = p;
+    S.version++;
+    S.lint = null;
+    S.built = null;
+    S.diags = new Map();
+    S.codeLines = new Map();
+    S.bpMoved = new Map();
+    S.disRows = [];
+    dbg.bps.clear();
+    leaveKsx();
+    $('#proj-name').textContent = p.name;
+    if (!p.open.length && p.main) p.open = [p.main];
+    const first = p.active && p.has(p.active) ? p.active : p.open[0];
+    if (first) openTab(first);
+    else { renderTabs(); renderExplorer(); }
+    S.watches = loadWatches();
+    dbg.setWatches(S.watches);
+    $('#asm-output').textContent = '(monte o projeto: Ctrl+B)';
+    renderDisasm();
+    renderProblems([]);
+    dbg.sync();
+    setState(S.vmState);
+    scheduleLint(0);
+    S.store.setMeta('last', p.id);
+  }
+
+  function openTab(name) {
+    if (!S.project.has(name)) return;
+    leaveKsx();
+    const fresh = !editor.has(name);
+    S.project.openFile(name);
+    editor.open(name, S.project.text(name));
+    if (fresh) {
+      editor.setBreakpoints(name, S.project.breakpoints.get(name) || []);
+      if (S.diags.get(name)) editor.setDiagnostics(name, S.diags.get(name));
+      if (S.codeLines.get(name)) editor.setCodeLines(name, S.codeLines.get(name));
+    }
+    $('#file-name').textContent = name;
+    $('#sb-file').textContent = name;
+    renderTabs();
+    renderExplorer();
+  }
+
+  function closeTab(name) {
+    S.project.closeFile(name);
+    if (editor.active === name) {
+      const next = S.project.active;
+      if (next) openTab(next);
+      else { editor.deactivate(); $('#file-name').textContent = '—'; }
+    }
+    renderTabs();
+    scheduleSave();
+  }
+
+  function renderTabs() {
+    const box = $('#tabs');
+    box.textContent = '';
+    for (const n of S.project.open) {
+      const sel = !S.ksxMode && n === editor.active;
+      const t = h('div', { class: 'tab', role: 'tab', 'aria-selected': sel ? 'true' : 'false', tabindex: sel ? '0' : '-1', title: n },
+        n === S.project.main ? h('span', { class: 'main-mark', title: 'principal' }, '★') : null,
+        h('span', {}, n),
+        (S.diags.get(n) || []).length ? h('span', { class: 'dot', title: 'erros' }, '●') : null,
+        h('button', { class: 'x', 'aria-label': 'fechar ' + n, title: 'fechar', onclick: (e) => { e.stopPropagation(); closeTab(n); } }, '×'));
+      t.addEventListener('click', () => openTab(n));
+      t.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(n); });
+      t.addEventListener('keydown', (e) => { if (e.key === 'Enter') openTab(n); });
+      box.append(t);
+    }
+    if (S.ksxMode) box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': 'true' }, h('span', {}, S.imageName + ' (desassembly)')));
+    $('#welcome').hidden = !!(S.project.open.length || S.ksxMode);
+    if (!S.project.open.length && !S.ksxMode) {
+      $('#welcome').textContent = S.project.files.size ? 'Abra um arquivo no explorador.' : 'Projeto vazio: crie um arquivo (＋) ou importe .ksasm/.zip.';
+      $('#editor').hidden = true;
+    } else if (!S.ksxMode) $('#editor').hidden = false;
+  }
+
+  function renderExplorer() {
+    const ul = $('#explorer');
+    ul.textContent = '';
+    const p = S.project;
+    for (const n of p.fileNames()) {
+      const slash = n.lastIndexOf('/');
+      const errs = (S.diags.get(n) || []).length;
+      const li = h('li', { role: 'treeitem', tabindex: '0', class: n === editor.active && !S.ksxMode ? 'active' : '', 'aria-selected': n === editor.active ? 'true' : 'false', title: n + (n === p.main ? ' (principal)' : '') },
+        h('span', { class: 'fname' }, slash >= 0 ? h('span', { class: 'dir' }, n.slice(0, slash + 1)) : null, n.slice(slash + 1)),
+        n === p.main ? h('span', { class: 'main-mark', title: 'arquivo principal (montado)' }, '★') : null,
+        errs ? h('span', { class: 'err-mark', title: errs + ' erro(s)' }, '✖' + errs) : null,
+        h('span', { class: 'ops' },
+          n !== p.main ? h('button', { title: 'tornar principal', 'aria-label': 'tornar ' + n + ' principal', onclick: (e) => { e.stopPropagation(); setMain(n); } }, '★') : null,
+          h('button', { title: 'renomear (F2)', 'aria-label': 'renomear ' + n, onclick: (e) => { e.stopPropagation(); startRename(li, n); } }, '✎'),
+          h('button', { title: 'duplicar', 'aria-label': 'duplicar ' + n, onclick: (e) => { e.stopPropagation(); duplicateFile(n); } }, '⧉'),
+          h('button', { title: 'excluir (Delete)', 'aria-label': 'excluir ' + n, onclick: (e) => { e.stopPropagation(); deleteFile(n); } }, '🗑')));
+      li.addEventListener('click', () => openTab(n));
+      li.addEventListener('keydown', (e) => {
+        if (e.target !== li) return;
+        if (e.key === 'Enter') openTab(n);
+        else if (e.key === 'F2') { e.preventDefault(); startRename(li, n); }
+        else if (e.key === 'Delete') deleteFile(n);
+        else if (e.key === 'ArrowDown' && li.nextElementSibling) li.nextElementSibling.focus();
+        else if (e.key === 'ArrowUp' && li.previousElementSibling) li.previousElementSibling.focus();
+      });
+      ul.append(li);
+    }
+    if (S.imageSource === 'ksx' && S.imageName) {
+      const li = h('li', { class: 'ksx' + (S.ksxMode ? ' active' : ''), tabindex: '0', title: 'imagem carregada (sem fonte)' }, h('span', { class: 'fname' }, S.imageName));
+      li.addEventListener('click', () => { if (!S.ksxMode) { S.ksxMode = true; $('#editor').hidden = true; $('#ksx-view').hidden = false; disassembleImage(S.image); renderTabs(); renderExplorer(); } });
+      ul.append(li);
+    }
+    $('#explorer-foot').textContent = p.files.size + ' arquivo(s)' + (S.store ? ' · salvo em ' + S.store.kind : '');
+  }
+
+  function startRename(li, name) {
+    const inp = h('input', { value: name, 'aria-label': 'novo nome de ' + name });
+    li.replaceChildren(inp);
+    inp.focus();
+    inp.setSelectionRange(name.lastIndexOf('/') + 1, name.replace(/\.[^./]*$/, '').length);
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      const to = inp.value.trim();
+      if (ok && to && to !== name) {
+        try {
+          S.project.renameFile(name, to);
+          editor.rename(name, to);
+          for (const k of [S.diags, S.codeLines]) if (k.has(name)) { k.set(to, k.get(name)); k.delete(name); }
+          S.version++;
+          scheduleSave();
+          scheduleLint(0);
+          if (editor.active === to) $('#file-name').textContent = to;
+          status('renomeado: ' + name + ' → ' + to + (/\.include/.test([...S.project.files.values()].join('\n')) ? ' (confira os .include)' : ''));
+        } catch (e) { status(e.message, true); }
+      }
+      renderExplorer();
+      renderTabs();
+    };
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); });
+    inp.addEventListener('blur', () => finish(true));
+  }
+
+  function newFile() {
+    const base = S.project.uniqueName('novo.ksasm');
     try {
-      const bytes = await readFile(file);
-      if ($('#opt-clear').checked) term.clear();
-      loadImage(bytes, file.name, $('#opt-autorun').checked);
-    } catch (e) {
-      sys('não consegui ler ' + file.name + ': ' + e.message, 'error');
+      S.project.addFile(base, '; ' + base + '\n        .text\n');
+    } catch (e) { status(e.message, true); return; }
+    S.version++;
+    scheduleSave();
+    openTab(base);
+    const li = [...$('#explorer').children].find((x) => x.title.startsWith(base));
+    if (li) startRename(li, base);
+  }
+
+  function duplicateFile(n) {
+    const d = S.project.duplicateFile(n);
+    S.version++;
+    scheduleSave();
+    openTab(d);
+  }
+
+  function deleteFile(n) {
+    if (!confirm('Excluir ' + n + '? (não dá para desfazer)')) return;
+    S.project.deleteFile(n);
+    editor.forget(n);
+    S.diags.delete(n);
+    S.codeLines.delete(n);
+    S.version++;
+    scheduleSave();
+    if (!editor.active && S.project.active) openTab(S.project.active);
+    renderTabs();
+    renderExplorer();
+    scheduleLint(0);
+    setState(S.vmState);
+  }
+
+  function setMain(n) {
+    S.project.setMain(n);
+    S.version++;
+    scheduleSave();
+    renderExplorer();
+    renderTabs();
+    scheduleLint(0);
+    status(n + ' é o arquivo principal (é ele que o ksas monta)');
+  }
+
+  function watchKey() { return 'ksweb-ide:watch:' + (S.project ? S.project.id : ''); }
+  function loadWatches() { try { return JSON.parse(localStorage.getItem(watchKey()) || '[]'); } catch (e) { return []; } }
+  function saveWatches(list) { S.watches = list; try { localStorage.setItem(watchKey(), JSON.stringify(list)); } catch (e) { /* sem localStorage */ } }
+
+  async function renderProjectMenu() {
+    const box = $('#menu-projects');
+    box.textContent = '';
+    box.append(h('div', { class: 'menu-label' }, 'Abrir projeto'));
+    for (const p of await S.store.list()) {
+      const b = h('button', { role: 'menuitem', class: p.id === S.project.id ? 'current' : '' },
+        p.name + ' ', h('span', { class: 'muted small' }, '(' + p.files + ' arq., ' + new Date(p.updated).toLocaleString('pt-BR') + ')'));
+      b.addEventListener('click', async () => { closeMenu(); await switchProject(p.id); });
+      box.append(b);
+    }
+  }
+
+  async function switchProject(id) {
+    if (id === S.project.id) return;
+    await scheduleSave(true);
+    const p = await S.store.load(id);
+    if (p) { setProject(p); status('projeto ' + p.name + ' aberto'); }
+  }
+
+  async function newProject(name, files, main, example) {
+    await scheduleSave(true);
+    const p = Project.create(name, files, main);
+    p.example = example || null;
+    await S.store.save(p);
+    setProject(p);
+    return p;
+  }
+
+  async function openExample(ex) {
+    if (!ex.files) {                         /* sem fonte: só a imagem */
+      openKsx(b64ToBytes(ex.b64), ex.name + '.ksx');
+      return;
+    }
+    await scheduleSave(true);
+    const list = await S.store.list();
+    const found = list.find((p) => p.example === ex.name);
+    let p = found ? await S.store.load(found.id) : null;
+    if (!p) p = await newProject('exemplo: ' + ex.name, ex.files, ex.main, ex.name);
+    else setProject(p);
+    if ($('#opt-clear').checked) term.clear();
+    if (ex.desc) sys(ex.desc);
+    if (ex.stdin) sys('este exemplo lê da entrada: digite no terminal (Enter envia a linha; Ctrl+D = EOF).');
+    if ($('#opt-autorun').checked) {
+      S.debugSession = false;
+      const r = await build(true);
+      if (r) {
+        S.imageSource = 'build';
+        S.imageVersion = S.built.version;
+        layout.showPanel('terminal');
+        loadImage(r.image, ex.name + '.ksx', true);
+      }
+    }
+  }
+
+  async function importFiles(fileList) {
+    const files = [...fileList];
+    for (const f of files) {
+      const bytes = await readFile(f);
+      if (/\.ksx$/i.test(f.name) || (bytes[0] === 0x4B && bytes[1] === 0x53 && bytes[2] === 0x58)) {
+        openKsx(bytes, f.name);
+        continue;
+      }
+      if (/\.zip$/i.test(f.name)) {
+        try {
+          const p = await KsProject.projectFromZip(bytes, f.name.replace(/\.zip$/i, ''));
+          await scheduleSave(true);
+          await S.store.save(p);
+          setProject(p);
+          status('projeto importado de ' + f.name + ': ' + p.files.size + ' arquivo(s)');
+        } catch (e) { status(f.name + ': ' + e.message, true); }
+        continue;
+      }
+      const text = new TextDecoder().decode(bytes);
+      const name = f.name.replace(/[^\p{L}\p{N}_.\-]/gu, '_');
+      if (S.project.has(name)) {
+        if (!confirm(name + ' já existe no projeto. Substituir?')) continue;
+        S.project.setText(name, text);
+        editor.setText(name, text);
+      } else {
+        try { S.project.addFile(name, text); } catch (e) { status(name + ': ' + e.message, true); continue; }
+      }
+      S.version++;
+      openTab(name);
+      status('importado: ' + name);
+    }
+    scheduleSave();
+    scheduleLint(0);
+  }
+
+  function exportZip() {
+    download(S.project.name.replace(/[^\p{L}\p{N}_.\-]+/gu, '_') + '.zip', KsProject.projectToZip(S.project), 'application/zip');
+    status('projeto exportado (.zip)');
+  }
+
+  function exportFiles() {
+    const names = S.project.fileNames();
+    names.forEach((n, i) => setTimeout(() => download(n.replace(/\//g, '_'), S.project.text(n)), i * 250));
+    status(names.length + ' arquivo(s) baixados');
+  }
+
+  async function exportKsx() {
+    const r = S.built && S.built.version === S.version ? S.built.result : await build(true);
+    if (r) download(S.project.main.replace(/\.[^./]*$/, '').replace(/\//g, '_') + '.ksx', r.image, 'application/octet-stream');
+  }
+
+  /* ---- menu, diálogos ---- */
+
+  function closeMenu() { $('#menu').hidden = true; $('#btn-menu').setAttribute('aria-expanded', 'false'); }
+
+  async function menuAction(act) {
+    closeMenu();
+    switch (act) {
+      case 'new-project': {
+        const name = prompt('Nome do novo projeto:', 'projeto');
+        if (name) await newProject(name.trim() || 'projeto', { 'main.ksasm': DEFAULT_MAIN }, 'main.ksasm');
+        break;
+      }
+      case 'rename-project': renameProject(); break;
+      case 'delete-project': {
+        if (!confirm('Excluir o projeto "' + S.project.name + '"? (não dá para desfazer)')) break;
+        const id = S.project.id;
+        await S.store.remove(id);
+        const rest = await S.store.list();
+        if (rest.length) setProject(await S.store.load(rest[0].id));
+        else await newProject('meu-projeto', { 'main.ksasm': DEFAULT_MAIN }, 'main.ksasm');
+        break;
+      }
+      case 'import-files': $('#file').click(); break;
+      case 'export-zip': exportZip(); break;
+      case 'export-files': exportFiles(); break;
+      case 'export-ksx': exportKsx(); break;
+      case 'open-ksx': $('#file-ksx').click(); break;
+      case 'new-file': newFile(); break;
+      default: break;
+    }
+  }
+
+  function renameProject() {
+    const el = $('#proj-name');
+    el.contentEditable = 'true';
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const finish = (ok) => {
+      el.contentEditable = 'false';
+      el.removeEventListener('keydown', onKey);
+      el.removeEventListener('blur', onBlur);
+      const v = el.textContent.trim();
+      if (ok && v) { S.project.name = v; S.project.touch(); scheduleSave(); }
+      el.textContent = S.project.name;
+    };
+    const onKey = (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') finish(false); };
+    const onBlur = () => finish(true);
+    el.addEventListener('keydown', onKey);
+    el.addEventListener('blur', onBlur);
+  }
+
+  /* ---- ajuda ao passar o mouse ---- */
+
+  function symbolInfo(name) {
+    const info = (S.lint && S.lint.result.info) || (S.built && S.built.result.info);
+    return info ? info.symByName.get(name) : null;
+  }
+
+  async function hover(q) {
+    const d = KsasmLang.describe(q.word, q.type);
+    const box = h('div', { class: 'ks-hover' });
+    if (/^(0[xXbB][0-9a-fA-F_]+|\d[\d_]*)$/.test(q.word)) {
+      const s = q.word.replace(/_/g, '');
+      const v = /^0[bB]/.test(s) ? parseInt(s.slice(2), 2) : Number(s);
+      if (!Number.isFinite(v)) return null;
+      const u = v >>> 0;
+      box.append(h('div', { class: 't' }, q.word),
+        h('div', { class: 'x' }, '0x' + u.toString(16).toUpperCase() + ' · ' + u + ' · ' + (u | 0) + ' (com sinal) · 0b' + u.toString(2)));
+      return box;
+    }
+    if (!d) return null;
+    if (d.kind === 'label') {
+      const s = symbolInfo(q.word);
+      const local = KsasmLang.scanLabels(editor.getText(q.file) || '').find((l) => l.name === q.word);
+      if (!s && !local) return null;
+      box.append(h('div', { class: 't' }, q.word + (s ? '  ' + (s.kind === 'equ' ? '= ' : '@ ') + hex8(s.addr) : '')));
+      const where = s && s.file ? s.file + ':' + s.line : local ? q.file + ':' + local.line : '';
+      box.append(h('div', { class: 'x' }, (s ? (s.kind === 'equ' ? 'constante' : 'rótulo em ' + s.kind) + (s.global ? ' (global)' : '') : 'rótulo (monte para ver o endereço)') + (where ? ' · definido em ' + where : '')));
+      if (s && s.kind !== 'equ' && S.loaded && S.imageSource === 'build' && (!isActive() || S.vmState === 'waiting')) {
+        const m = await memRead(s.addr, 32);
+        if (m && m.mask[0]) {
+          const b = m.bytes, ok4 = m.mask[3];
+          const w = ok4 ? (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0 : null;
+          let n = 0;
+          while (n < 32 && m.mask[n] && b[n]) n++;
+          const str = new TextDecoder().decode(b.slice(0, n)).replace(/\n/g, '\\n').replace(/[\x00-\x1f]/g, '.');
+          const t = h('table', {});
+          if (w !== null) t.append(h('tr', {}, h('td', {}, 'word'), h('td', {}, hex8(w) + ' = ' + (w | 0) + ' · float ' + F.f32Str(w))));
+          t.append(h('tr', {}, h('td', {}, 'bytes'), h('td', {}, Array.from(b.slice(0, 8)).map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join(' '))));
+          if (str) t.append(h('tr', {}, h('td', {}, 'texto'), h('td', {}, '"' + str + '"')));
+          box.append(t);
+        }
+      }
+      return box;
+    }
+    box.append(h('div', { class: 't' }, d.title));
+    if (d.signature) box.append(h('div', { class: 'sig' }, d.signature));
+    if (d.desc) box.append(h('div', { class: 'd' }, d.desc));
+    if (d.detail) box.append(h('div', { class: 'x' }, d.detail));
+    if (d.kind === 'register' && dbg.cpu && d.index !== null && S.loaded) {
+      const v = d.index === 0 ? 0 : dbg.cpu.r[d.index] >>> 0;
+      box.append(h('table', {}, h('tr', {}, h('td', {}, 'valor'), h('td', {}, hex8(v) + ' = ' + (v | 0) + (dbg.regChanged(d.index) ? '  (alterado)' : ''))),
+        h('tr', {}, h('td', {}, 'float'), h('td', {}, F.f32Str(v)))));
+    }
+    return box;
+  }
+
+  /* Rótulos para o autocomplete: os do arquivo e os símbolos da montagem. */
+  function labelsFor(name, text, line) {
+    const out = KsasmLang.labelCompletions(text, '', line);
+    const info = S.lint && S.lint.result.info;
+    if (info) {
+      const seen = new Set(out.map((l) => l.name));
+      for (const l of out) { const s = info.symByName.get(l.name); if (s) l.addr = s.addr; }
+      for (const s of info.symbols) {
+        if (seen.has(s.name) || !s.file) continue;
+        out.push({ name: s.name, line: s.line, file: s.file, kind: s.kind === 'equ' ? 'equ' : 'label', addr: s.addr });
+      }
+    }
+    return out;
+  }
+
+  /* ---- atalhos ---- */
+
+  function doShortcut(act) {
+    switch (act) {
+      case 'run': run(); break;
+      case 'toggleRun': if (isActive()) pause(); else run(); break;
+      case 'stop': pause(); break;
+      case 'restart': restart(); break;
+      case 'breakpoint': if (!S.ksxMode) editor.toggleBreakpoint(); break;
+      case 'debugger': layout.collapse('right'); break;
+      case 'step': stepMode('over'); break;
+      case 'stepInto': stepMode('into'); break;
+      case 'stepOut': stepMode('out'); break;
+      case 'build': build(false); break;
+      case 'save': scheduleSave(true); break;
+      case 'help': if (!$('#dlg-help').open) $('#dlg-help').showModal(); break;
+      default: break;
     }
   }
 
@@ -307,11 +1183,7 @@
     sel.addEventListener('change', () => {
       const ex = list.find((e) => e.name === sel.value);
       sel.value = '';
-      if (!ex) return;
-      if ($('#opt-clear').checked) term.clear();
-      if (ex.desc) sys(ex.desc);
-      if (ex.stdin) sys('este exemplo lê da entrada: digite no terminal (Enter envia a linha; Ctrl+D = EOF).');
-      loadImage(b64ToBytes(ex.b64), ex.name + '.ksx', true);
+      if (ex) openExample(ex);
     });
   }
 
@@ -325,8 +1197,7 @@
       e.preventDefault();
       depth = 0;
       overlay.hidden = true;
-      const f = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) openFile(f);
+      if (e.dataTransfer.files && e.dataTransfer.files.length) importFiles(e.dataTransfer.files);
     });
   }
 
@@ -343,7 +1214,25 @@
     apply();
   }
 
-  function init() {
+  /* Opções lembradas entre sessões (localStorage). */
+  function setupOptions() {
+    const KEY = 'ksweb-ide:options';
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { saved = {}; }
+    const inputs = [...document.querySelectorAll('#dlg-options input, #dlg-options select')];
+    for (const i of inputs) {
+      if (!(i.id in saved)) continue;
+      if (i.type === 'checkbox') i.checked = !!saved[i.id]; else i.value = saved[i.id];
+    }
+    const store = () => {
+      const o = {};
+      for (const i of inputs) o[i.id] = i.type === 'checkbox' ? i.checked : i.value;
+      try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* sem localStorage */ }
+    };
+    for (const i of inputs) i.addEventListener('change', store);
+  }
+
+  async function init() {
     term = new TerminalView($('#term'), {
       cols: 80, rows: 24, scrollback: 5000,
       onData: (s) => sendInput(s),
@@ -352,16 +1241,65 @@
       onTitle: (t) => { $('#term-title').textContent = t; },
       onResize: (c, r) => { $('#term-size').textContent = c + '×' + r; }
     });
-    dbg = new DebuggerPanel($('#debugger'), { send, run, pause, step, restart: () => restart(false) });
-    dbg.el.hidden = true;
+    dbg = new DebuggerPanel($('#debugger'), {
+      send, step: (n) => stepN(n), breakpoints: breakpointList, addAddrBreakpoint, removeBreakpoint, clearBreakpoints,
+      gotoSource: (f, l) => { openTab(f); editor.gotoLine(f, l, 1); },
+      watchesChanged: saveWatches
+    });
+    editor = new KsEditor($('#editor'), {
+      onChange: onEdit,
+      onCursor: (l, c) => { $('#sb-pos').textContent = 'Ln ' + l + ', Col ' + c; },
+      onBreakpoints: onEditorBreakpoints,
+      labels: labelsFor,
+      hover,
+      keys: { 'Mod-b': () => doShortcut('build'), 'Mod-s': () => doShortcut('save') }
+    });
+    layout = new KsLayout({ onPanel: (name) => {
+      if (name === 'terminal') setTimeout(() => term.fitToContainer(), 0);
+      if (name === 'disasm') setTimeout(() => renderDisasmPc(S.loaded && !isActive() ? S.pc : null), 0);
+    } });
 
-    $('#file').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) openFile(f); e.target.value = ''; });
-    $('#btn-open').addEventListener('click', () => $('#file').click());
+    $('#btn-build').addEventListener('click', () => build(false));
     $('#btn-run').addEventListener('click', run);
+    $('#btn-debug').addEventListener('click', debugStart);
     $('#btn-stop').addEventListener('click', pause);
-    $('#btn-restart').addEventListener('click', () => restart($('#opt-autorun').checked));
-    $('#btn-step').addEventListener('click', () => step(1));
-    $('#btn-dbg').addEventListener('click', () => toggleDebugger());
+    $('#btn-restart').addEventListener('click', restart);
+    $('#btn-continue').addEventListener('click', cont);
+    $('#btn-step-over').addEventListener('click', () => stepMode('over'));
+    $('#btn-step-into').addEventListener('click', () => stepMode('into'));
+    $('#btn-step-out').addEventListener('click', () => stepMode('out'));
+    $('#btn-stale-build').addEventListener('click', restart);
+    $('#btn-import').addEventListener('click', () => $('#file').click());
+    $('#btn-export').addEventListener('click', exportZip);
+    $('#btn-options').addEventListener('click', () => $('#dlg-options').showModal());
+    $('#btn-help').addEventListener('click', () => $('#dlg-help').showModal());
+    $('#btn-menu').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const m = $('#menu');
+      if (!m.hidden) { closeMenu(); return; }
+      await renderProjectMenu();
+      m.hidden = false;
+      $('#btn-menu').setAttribute('aria-expanded', 'true');
+      const first = m.querySelector('button');
+      if (first) first.focus();
+    });
+    document.addEventListener('click', (e) => { if (!$('#menu').hidden && !$('#menu').contains(e.target)) closeMenu(); });
+    $('#menu').addEventListener('keydown', (e) => {
+      const items = [...$('#menu').querySelectorAll('button')];
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { closeMenu(); $('#btn-menu').focus(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    });
+    for (const b of document.querySelectorAll('[data-act]')) b.addEventListener('click', () => menuAction(b.dataset.act));
+    $('#proj-name').addEventListener('click', renameProject);
+    $('#proj-name').addEventListener('keydown', (e) => { if (e.key === 'Enter' && $('#proj-name').contentEditable !== 'true') { e.preventDefault(); renameProject(); } });
+    $('#file').addEventListener('change', (e) => { const f = e.target.files; if (f && f.length) importFiles(f); e.target.value = ''; });
+    $('#file-ksx').addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      e.target.value = '';
+      if (f) openKsx(await readFile(f), f.name);
+    });
     $('#btn-eof').addEventListener('click', () => { sendEof(); sys('EOF enviado'); });
     $('#btn-clear').addEventListener('click', () => term.clear());
     $('#stdin-file-btn').addEventListener('click', () => $('#stdin-file').click());
@@ -374,35 +1312,60 @@
       if ($('#opt-stdin-eof').checked) send({ type: 'eof' });
       sys('stdin: ' + f.name + ' (' + bytes.length + ' bytes)' + ($('#opt-stdin-eof').checked ? ' + EOF' : ''));
     });
+    setupOptions();
     $('#opt-mode').addEventListener('change', (e) => {
       term.setLineMode(e.target.value === 'line');
       $('#mode-hint').textContent = e.target.value === 'line' ? 'linha (eco local)' : 'raw';
     });
+    term.setLineMode($('#opt-mode').value === 'line');
+    $('#mode-hint').textContent = $('#opt-mode').value === 'line' ? 'linha (eco local)' : 'raw';
     $('#opt-bs').addEventListener('change', (e) => { term.backspace = e.target.value === 'bs' ? '\b' : '\x7f'; });
     $('#opt-poll').addEventListener('change', (e) => send({ type: 'config', stdinBlock: !e.target.checked }));
     $('#opt-slice').addEventListener('change', () => send({ type: 'config', slice: runOpts().slice }));
+    $('#opt-lint').addEventListener('change', () => scheduleLint(0));
+    $('#opt-g').addEventListener('change', () => { S.lint = null; S.version++; scheduleLint(0); updateStale(); });
     $('#btn-copy-all').addEventListener('click', () => {
       const t = term.allText();
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(t).then(() => sys('terminal copiado'), () => download('terminal.txt', t));
-      } else {
-        download('terminal.txt', t);
-      }
+      } else download('terminal.txt', t);
     });
     document.addEventListener('keydown', (e) => {
-      const sc = pageShortcut(e);
-      if (sc) e.preventDefault();
-      if (sc === 'run') { if (['running', 'sleeping', 'waiting'].includes(state.vmState)) pause(); else run(); }
-      else if (sc === 'step') step(1);
-      else if (sc === 'debugger') toggleDebugger();
+      if (e.defaultPrevented || e.isComposing) return;
+      if (document.querySelector('dialog[open]') && e.key !== 'F1') return;
+      const act = ideShortcut(e);
+      if (!act) return;
+      e.preventDefault();
+      doShortcut(act);
     });
+    window.addEventListener('beforeunload', () => { if (S.project && S.store) S.store.save(S.project); });
     setupExamples();
     setupDrop();
     setupTermSize();
+
+    S.store = new ProjectStore();
+    const kind = await S.store.open();
+    $('#sb-store').textContent = kind === 'indexeddb' ? 'IndexedDB' : kind === 'localstorage' ? 'localStorage' : 'sem persistência';
+    let p = null;
+    try {
+      const last = await S.store.getMeta('last');
+      if (last) p = await S.store.load(last);
+      if (!p) { const l = await S.store.list(); if (l.length) p = await S.store.load(l[0].id); }
+    } catch (e) { p = null; }
+    if (!p) {
+      p = Project.create('meu-projeto', { 'main.ksasm': DEFAULT_MAIN }, 'main.ksasm');
+      await S.store.save(p);
+    } else status('projeto ' + p.name + ' recuperado (' + kind + ')');
+    setProject(p);
     setState('idle');
-    term.el.focus({ preventScroll: true });
     boot();
   }
+
+  /* API para testes de navegador e depuração no console. */
+  window.ksweb = {
+    get state() { return S; }, get editor() { return editor; }, get layout() { return layout; },
+    build, run, cont, pause, restart, stepMode, openTab, openKsx, setMain, breakpoints: breakpointList
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

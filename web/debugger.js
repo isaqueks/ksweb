@@ -1,10 +1,15 @@
 /*
- * debugger.js — painel "Depurador" (DOM). Mostra o retrato que o worker
- * manda a cada parada (registradores, disassembly ao redor do pc, pilha,
- * trace) e pede ao worker a janela de memória do hexdump. Os
- * breakpoints e as opções de parada vivem no laço C (ksweb_run); este
- * painel só mantém a lista e a reenvia. Fechado, o depurador desliga
- * trace e checagens (o laço volta ao caminho rápido).
+ * debugger.js — painel "Depurador" da coluna direita da IDE (DOM). Mostra o
+ * retrato que o worker manda a cada parada (registradores, pilha, trace),
+ * pede ao worker a janela de memória do hexdump e as leituras do watch, e
+ * lista os breakpoints. O disassembly com breakpoints por endereço fica no
+ * painel inferior (ksweb.js, a partir do ksdis); os breakpoints de fonte,
+ * no gutter do editor. A tabela de breakpoints e as opções de parada vivem
+ * no laço C (ksweb_run): este painel monta a configuração e a reenvia.
+ *
+ * app: {send(msg), step(n), breakpoints() -> [{addr, file, line, moved}],
+ *       addAddrBreakpoint(addr), removeBreakpoint(bp), gotoSource(file, line),
+ *       watchesChanged(list)}
  *
  * Formatação: format.js (KsFormat), testada em Node.
  */
@@ -13,6 +18,7 @@
   /* global KsFormat */
   const F = () => root.KsFormat;
   const $ = (sel, el) => (el || document).querySelector(sel);
+  const WATCH_ID0 = 1000000;
 
   function h(tag, attrs, ...kids) {
     const e = document.createElement(tag);
@@ -25,13 +31,24 @@
     return e;
   }
 
+  /* Texto C (até o primeiro 0) com escapes, no máximo n caracteres. */
+  function cString(bytes, mask, n) {
+    let s = '';
+    for (let i = 0; i < bytes.length && s.length < n; i++) {
+      if (!mask[i]) return s + '…?';
+      const b = bytes[i];
+      if (b === 0) return '"' + s + '"';
+      s += b === 10 ? '\\n' : b === 9 ? '\\t' : b === 13 ? '\\r' : b === 34 ? '\\"' : b === 92 ? '\\\\' : (b >= 32 && b < 127 ? String.fromCharCode(b) : '\\x' + b.toString(16).padStart(2, '0'));
+    }
+    return '"' + s + '…';
+  }
+
   class DebuggerPanel {
-    /* app: {send(msg), step(n), run(), pause(), restart()} */
     constructor(el, app) {
       this.el = el;
       this.app = app;
-      this.open = false;
-      this.bps = new Set();
+      this.open = true;
+      this.bps = new Set();          /* breakpoints por endereço sem fonte (ex.: .ksx carregado) */
       this.prevCpu = null;
       this.cpu = null;
       this.header = null;
@@ -40,11 +57,11 @@
       this.symByAddr = new Map();
       this.names = {};
       this.memAddr = 0;
-      this.memPrev = null;
       this.memId = 0;
       this.showFloat = false;
       this.trace = [];
       this.traceTotal = 0;
+      this.watches = [];             /* [{expr, addr, prev, cur, err}] */
       this._build();
     }
 
@@ -53,40 +70,35 @@
       el.innerHTML = '';
       el.append(
         h('div', { class: 'dbg-head' },
-          h('strong', {}, 'Depurador'),
+          h('span', { class: 'dbg-reason', id: 'dbg-reason' }, ''),
           h('span', { class: 'dbg-stats', id: 'dbg-stats' }, '')),
         h('section', { class: 'dbg-sec' },
           h('div', { class: 'row' },
-            h('button', { onclick: () => this.app.run(), title: 'Continuar (F8)' }, 'Continuar'),
-            h('button', { onclick: () => this.app.pause(), title: 'Parar (Ctrl+Alt+C)' }, 'Parar'),
-            h('button', { onclick: () => this.app.step(1), title: 'Uma instrução (F10)' }, 'Passo'),
-            h('button', { onclick: () => this.app.step(this._stepN()) }, 'Passo N'),
-            h('input', { id: 'dbg-stepn', type: 'number', min: '1', value: '100', class: 'num', title: 'N' }),
-            h('button', { onclick: () => this.app.restart() }, 'Reiniciar')),
-          h('div', { class: 'row' },
-            h('label', {}, h('input', { type: 'checkbox', id: 'dbg-brk', checked: 'checked', onchange: () => this._sendCfg() }), ' parar em BRK'),
-            h('label', {}, h('input', { type: 'checkbox', id: 'dbg-sys', onchange: () => this._sendCfg() }), ' parar em syscall'),
-            h('label', {}, h('input', { type: 'checkbox', id: 'dbg-trace', checked: 'checked', onchange: () => this._sendCfg() }), ' trace'),
-            h('input', { id: 'dbg-tracen', type: 'number', min: '1', max: '65536', value: '1000', class: 'num', title: 'registros guardados', onchange: () => this._sendCfg() })),
-          h('div', { class: 'dbg-reason', id: 'dbg-reason' }, '')),
+            h('button', { class: 'small', onclick: () => this.app.step(this._stepN()), title: 'Executa N instruções, respeitando breakpoints' }, 'Passo N'),
+            h('input', { id: 'dbg-stepn', type: 'number', min: '1', value: '100', class: 'num', 'aria-label': 'N instruções' }),
+            h('label', { class: 'small' }, h('input', { type: 'checkbox', id: 'dbg-brk', checked: 'checked', onchange: () => this._sendCfg() }), ' parar em BRK'),
+            h('label', { class: 'small' }, h('input', { type: 'checkbox', id: 'dbg-sys', onchange: () => this._sendCfg() }), ' parar em syscall'))),
         this._section('Registradores', 'regs',
           h('label', { class: 'small' }, h('input', { type: 'checkbox', onchange: (e) => { this.showFloat = e.target.checked; this._renderRegs(); } }), ' float'),
           h('div', { id: 'dbg-regs', class: 'dbg-regs' })),
-        this._section('Disassembly', 'dis', null,
-          h('div', { id: 'dbg-dis', class: 'dbg-list mono', title: 'clique numa linha para ligar/desligar breakpoint' })),
+        this._section('Watch', 'watch', null,
+          h('div', { class: 'row' },
+            h('input', { id: 'dbg-watch-in', placeholder: 'rótulo, 0x1000, sp+8', class: 'addr', 'aria-label': 'Expressão do watch', onkeydown: (e) => { if (e.key === 'Enter') this._addWatchFromInput(); } }),
+            h('button', { class: 'small', onclick: () => this._addWatchFromInput() }, 'Adicionar')),
+          h('table', { id: 'dbg-watch', class: 'watch' })),
         this._section('Breakpoints', 'bp', null,
           h('div', { class: 'row' },
-            h('input', { id: 'dbg-bp-in', placeholder: '0x1C, rótulo, pc+8', class: 'addr', onkeydown: (e) => { if (e.key === 'Enter') this._addBpFromInput(); } }),
-            h('button', { onclick: () => this._addBpFromInput() }, 'Adicionar'),
-            h('button', { onclick: () => { this.bps.clear(); this._sendCfg(); this._renderBps(); this._renderDis(); } }, 'Limpar')),
+            h('input', { id: 'dbg-bp-in', placeholder: '0x1C, rótulo, pc+8', class: 'addr', 'aria-label': 'Endereço do breakpoint', onkeydown: (e) => { if (e.key === 'Enter') this._addBpFromInput(); } }),
+            h('button', { class: 'small', onclick: () => this._addBpFromInput() }, 'Adicionar'),
+            h('button', { class: 'small', onclick: () => { this.bps.clear(); if (this.app.clearBreakpoints) this.app.clearBreakpoints(); this._sendCfg(); this.renderBreakpoints(); } }, 'Limpar')),
           h('ul', { id: 'dbg-bps', class: 'dbg-bps mono' })),
         this._section('Pilha', 'stack', null, h('div', { id: 'dbg-stack', class: 'dbg-list mono' })),
         this._section('Memória', 'mem', null,
           h('div', { class: 'row' },
-            h('input', { id: 'dbg-mem-in', placeholder: 'endereço', class: 'addr', onkeydown: (e) => { if (e.key === 'Enter') this._gotoInput(); } }),
-            h('button', { onclick: () => this._gotoInput() }, 'Ir'),
-            h('button', { onclick: () => this._memGo(this.memAddr - 256) }, '◀'),
-            h('button', { onclick: () => this._memGo(this.memAddr + 256) }, '▶')),
+            h('input', { id: 'dbg-mem-in', placeholder: 'endereço', class: 'addr', 'aria-label': 'Ir para o endereço', onkeydown: (e) => { if (e.key === 'Enter') this._gotoInput(); } }),
+            h('button', { class: 'small', onclick: () => this._gotoInput() }, 'Ir'),
+            h('button', { class: 'small', 'aria-label': 'Página anterior', onclick: () => this._memGo(this.memAddr - 256) }, '◀'),
+            h('button', { class: 'small', 'aria-label': 'Próxima página', onclick: () => this._memGo(this.memAddr + 256) }, '▶')),
           h('div', { class: 'row', id: 'dbg-mem-jumps' }),
           h('div', { id: 'dbg-mem', class: 'dbg-hex mono' }),
           h('div', { class: 'legend small' },
@@ -94,19 +106,22 @@
             h('span', { class: 'rg-bss' }, '.bss'), ' ', h('span', { class: 'rg-heap' }, 'heap'), ' ',
             h('span', { class: 'rg-stack' }, 'pilha'), ' ', h('span', { class: 'chg' }, 'alterado'))),
         this._section('Trace', 'trace',
-          h('span', {},
-            h('button', { onclick: () => this.app.send({ type: 'trace-export' }), title: 'mesmo formato do ksvm --trace' }, 'Exportar .txt')),
+          h('span', { class: 'row' },
+            h('label', { class: 'small' }, h('input', { type: 'checkbox', id: 'dbg-trace', checked: 'checked', onchange: () => this._sendCfg() }), ' ligado'),
+            h('input', { id: 'dbg-tracen', type: 'number', min: '1', max: '65536', value: '1000', class: 'num', title: 'registros guardados', 'aria-label': 'Registros de trace guardados', onchange: () => this._sendCfg() }),
+            h('button', { class: 'small', onclick: () => this.app.send({ type: 'trace-export' }), title: 'mesmo formato do ksvm --trace' }, 'Exportar .txt')),
           h('pre', { id: 'dbg-trace', class: 'dbg-trace mono' }))
       );
       const jumps = $('#dbg-mem-jumps', el);
       for (const [label, fn] of [
         ['pc', () => this.cpu && this.cpu.pc], ['sp', () => this.cpu && this.cpu.r[31]], ['fp', () => this.cpu && this.cpu.r[30]],
-        ['CODE', () => 0], ['RAM', () => this.header && this.header.ramBase],
-        ['.data', () => this.header && this.header.ramBase],
+        ['CODE', () => 0], ['.data', () => this.header && this.header.ramBase],
         ['.bss', () => this.header && this.header.ramBase + this.header.dataSize],
         ['heap', () => this.header && this.header.heapStart]]) {
         jumps.append(h('button', { class: 'small', onclick: () => { const a = fn(); if (a !== undefined && a !== null) this._memGo(a & ~15); } }, label));
       }
+      this.renderBreakpoints();
+      this._renderWatch();
     }
 
     _section(title, id, extra, ...body) {
@@ -116,10 +131,17 @@
 
     _stepN() { return Math.max(1, parseInt($('#dbg-stepn', this.el).value, 10) || 1); }
 
+    /* Endereços de todos os breakpoints: os da IDE (fonte) e os daqui. */
+    bpAddrs() {
+      const s = new Set(this.bps);
+      if (this.app.breakpoints) for (const b of this.app.breakpoints()) if (b.addr !== null && b.addr !== undefined) s.add(b.addr >>> 0);
+      return [...s];
+    }
+
     config() {
       return {
         on: this.open,
-        bps: Array.from(this.bps),
+        bps: this.bpAddrs(),
         stopBrk: $('#dbg-brk', this.el).checked,
         stopSyscall: $('#dbg-sys', this.el).checked,
         traceN: $('#dbg-trace', this.el).checked ? Math.max(1, Math.min(65536, parseInt($('#dbg-tracen', this.el).value, 10) || 1000)) : 0
@@ -127,10 +149,10 @@
     }
 
     _sendCfg() { this.app.send({ type: 'debug', debug: this.config() }); }
+    sync() { this._sendCfg(); this.renderBreakpoints(); }
 
     setOpen(on) {
       this.open = on;
-      this.el.hidden = !on;
       this._sendCfg();
     }
 
@@ -154,9 +176,11 @@
       this.seenKey = null;
       this.memAddr = header.ramBase & ~15;
       this.trace = [];
+      for (const w of this.watches) { w.prev = null; w.cur = null; }
       $('#dbg-trace', this.el).textContent = '';
       $('#dbg-reason', this.el).textContent = '';
-      this._renderBps();
+      this.renderBreakpoints();
+      this._renderWatch();
     }
 
     stats(insns, ips) {
@@ -177,10 +201,10 @@
       this.traceTotal = s.traceTotal;
       if (!this.open) return;
       this._renderRegs();
-      this._renderDis();
       this._renderStack();
       this._renderTrace();
       this._memGo(this.memAddr);
+      this._readWatches();
     }
 
     _renderRegs() {
@@ -188,7 +212,6 @@
       if (!this.cpu) { box.textContent = ''; return; }
       const fmt = F();
       const rows = fmt.regRows(this.cpu, this.prevCpu);
-      /* duas colunas: r0..r15 | r16..r31; título de cada célula = sem sinal e float */
       const t = h('table', { class: 'regs mono' });
       const cols = this.showFloat ? ['', 'hex', 'dec', 'f32'] : ['', 'hex', 'dec'];
       t.append(h('tr', {}, ...cols.concat(cols).map((c) => h('th', {}, c))));
@@ -210,33 +233,20 @@
       box.replaceChildren(t);
     }
 
-    _renderDis() {
-      const box = $('#dbg-dis', this.el);
-      box.textContent = '';
-      if (!this.window) return;
-      let curEl = null;
-      for (const ins of this.window) {
-        for (const name of this.symByAddr.get(ins.addr) || []) box.append(h('div', { class: 'lbl' }, name + ':'));
-        const bp = this.bps.has(ins.addr);
-        const faulted = this.fault && ins.current;
-        const line = h('div', {
-          class: 'dl' + (ins.current ? ' cur' : '') + (bp ? ' bp' : '') + (faulted ? ' fault' : ''),
-          onclick: () => this.toggleBp(ins.addr)
-        }, h('span', { class: 'dot' }, bp ? '●' : ' '), h('span', { class: 'ad' }, F().hex(ins.addr)), '  ', ins.text);
-        box.append(line);
-        if (ins.current) curEl = line;
-      }
-      /* rola só a lista (scrollIntoView rolaria o painel inteiro) */
-      if (curEl) box.scrollTop = curEl.offsetTop - box.clientHeight / 2;
-    }
+    /* Registrador alterado desde a parada anterior? (para a ajuda do editor) */
+    regChanged(i) { return !!(this.prevCpu && this.cpu && this.prevCpu.r[i] !== this.cpu.r[i]); }
 
     toggleBp(addr) {
       addr >>>= 0;
-      if (this.bps.has(addr)) this.bps.delete(addr); else this.bps.add(addr);
-      this._sendCfg();
-      this._renderBps();
-      this._renderDis();
+      const src = this.app.breakpoints ? this.app.breakpoints().find((b) => b.addr === addr) : null;
+      if (src && this.app.removeBreakpoint) this.app.removeBreakpoint(src);
+      else if (this.bps.has(addr)) this.bps.delete(addr);
+      else if (this.app.addAddrBreakpoint) this.app.addAddrBreakpoint(addr);
+      else this.bps.add(addr);
+      this.sync();
     }
+
+    hasBp(addr) { return this.bpAddrs().includes(addr >>> 0); }
 
     _addBpFromInput() {
       const inp = $('#dbg-bp-in', this.el);
@@ -244,21 +254,29 @@
       if (a === null || (a & 3)) { inp.classList.add('bad'); return; }
       inp.classList.remove('bad');
       inp.value = '';
-      this.bps.add(a);
-      this._sendCfg();
-      this._renderBps();
-      this._renderDis();
+      if (!this.hasBp(a)) this.toggleBp(a);
     }
 
-    _renderBps() {
+    renderBreakpoints() {
       const ul = $('#dbg-bps', this.el);
       ul.textContent = '';
-      for (const a of Array.from(this.bps).sort((x, y) => x - y)) {
-        const names = this.symByAddr.get(a);
-        ul.append(h('li', {}, '0x' + F().hex(a) + (names ? '  ' + names.join(', ') : ''), ' ',
-          h('button', { class: 'small', title: 'remover', onclick: () => this.toggleBp(a) }, '×')));
+      const list = (this.app.breakpoints ? this.app.breakpoints() : []).map((b) => Object.assign({ kind: 'src' }, b));
+      for (const a of this.bps) if (!list.some((b) => b.addr === a)) list.push({ addr: a, kind: 'addr' });
+      list.sort((x, y) => (x.addr === null ? 1e12 : x.addr) - (y.addr === null ? 1e12 : y.addr) || String(x.file).localeCompare(String(y.file)) || (x.line || 0) - (y.line || 0));
+      for (const b of list) {
+        const names = b.addr !== null && b.addr !== undefined ? this.symByAddr.get(b.addr) : null;
+        const li = h('li', {},
+          h('span', {}, b.addr !== null && b.addr !== undefined ? '0x' + F().hex(b.addr) : '(sem código)'),
+          b.file ? h('a', { onclick: () => this.app.gotoSource && this.app.gotoSource(b.file, b.line), title: 'ir para o fonte' }, b.file + ':' + b.line) : null,
+          names ? h('span', { class: 'src' }, names.join(', ')) : null,
+          b.moved ? h('span', { class: 'src', title: 'a linha marcada não gera código' }, '(movido da ' + b.moved + ')') : null,
+          h('button', { class: 'small', title: 'remover', 'aria-label': 'remover breakpoint', onclick: () => {
+            if (b.kind === 'addr') this.bps.delete(b.addr); else if (this.app.removeBreakpoint) this.app.removeBreakpoint(b);
+            this.sync();
+          } }, '×'));
+        ul.append(li);
       }
-      if (!this.bps.size) ul.append(h('li', { class: 'muted' }, 'nenhum'));
+      if (!list.length) ul.append(h('li', { class: 'muted' }, 'nenhum (F9 ou clique no gutter do editor)'));
     }
 
     _renderStack() {
@@ -304,11 +322,84 @@
       this.app.send({ type: 'mem', addr: this.memAddr, len: 256, id: ++this.memId });
     }
 
-    /* Resposta do worker a 'mem'. */
+    /* ---- watch ---- */
+
+    setWatches(list) {
+      this.watches = (list || []).map((expr) => ({ expr, addr: null, prev: null, cur: null, err: null }));
+      this._renderWatch();
+      this._readWatches();
+    }
+
+    _addWatchFromInput() {
+      const inp = $('#dbg-watch-in', this.el);
+      const expr = inp.value.trim();
+      if (!expr) return;
+      inp.value = '';
+      this.watches.push({ expr, addr: null, prev: null, cur: null, err: null });
+      if (this.app.watchesChanged) this.app.watchesChanged(this.watches.map((w) => w.expr));
+      this._renderWatch();
+      this._readWatches();
+    }
+
+    _readWatches() {
+      if (!this.header) return;
+      this.watches.forEach((w, i) => {
+        const a = F().parseAddress(w.expr, this.cpu, this.names);
+        w.addr = a;
+        w.err = a === null ? 'expressão inválida' : null;
+        if (a !== null) this.app.send({ type: 'mem', addr: a >>> 0, len: 64, id: WATCH_ID0 + i });
+      });
+      this._renderWatch();
+    }
+
+    _watchData(i, m) {
+      const w = this.watches[i];
+      if (!w) return;
+      const b = m.bytes, k = m.mask;
+      const ok4 = k[0] && k[1] && k[2] && k[3];
+      const word = ok4 ? (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0 : null;
+      const key = this.cpu ? this.cpu.insns + ':' + this.cpu.pc : '';
+      if (w.curKey !== key) { w.prev = w.cur; w.curKey = key; }
+      w.cur = { word, byte: k[0] ? b[0] : null, str: cString(b, k, 40) };
+      this._renderWatch();
+    }
+
+    _renderWatch() {
+      const t = $('#dbg-watch', this.el);
+      if (!t) return;
+      t.textContent = '';
+      if (!this.watches.length) { t.append(h('tr', {}, h('td', { class: 'muted' }, 'digite um rótulo ou endereço: mostra word, byte, float e string'))); return; }
+      t.append(h('tr', {}, h('th', {}, 'expr'), h('th', {}, 'valor'), h('th', {}, '')));
+      const fmt = F();
+      this.watches.forEach((w, i) => {
+        let val, cls = 'wv';
+        if (w.err) { val = w.err; cls += ' bad'; }
+        else if (!w.cur) val = w.addr !== null ? '@0x' + fmt.hex(w.addr) : '';
+        else if (w.cur.word === null && w.cur.byte === null) { val = '@0x' + fmt.hex(w.addr) + ' ilegível'; cls += ' bad'; }
+        else {
+          const c = w.cur;
+          const parts = ['@0x' + fmt.hex(w.addr)];
+          if (c.word !== null) parts.push('word 0x' + fmt.hex(c.word) + ' = ' + (c.word | 0), 'float ' + fmt.f32Str(c.word));
+          if (c.byte !== null) parts.push('byte 0x' + c.byte.toString(16).toUpperCase().padStart(2, '0') + ' = ' + c.byte + (c.byte >= 32 && c.byte < 127 ? " '" + String.fromCharCode(c.byte) + "'" : ''));
+          parts.push('str ' + c.str);
+          val = parts.join(' · ');
+        }
+        const changed = w.prev && w.cur && w.prev.word !== w.cur.word;
+        t.append(h('tr', { class: changed ? 'chg' : '' },
+          h('td', { class: 'wn' }, w.expr), h('td', { class: cls }, val),
+          h('td', {}, h('button', { class: 'small', 'aria-label': 'remover watch ' + w.expr, onclick: () => {
+            this.watches.splice(i, 1);
+            if (this.app.watchesChanged) this.app.watchesChanged(this.watches.map((x) => x.expr));
+            this._renderWatch();
+          } }, '×'))));
+      });
+    }
+
+    /* Resposta do worker a 'mem' (hexdump ou watch). */
     memData(m) {
+      if (m.id >= WATCH_ID0) { this._watchData(m.id - WATCH_ID0, m); return; }
       if (m.id !== this.memId || !this.open) return;
       const fmt = F();
-      /* "alterado" = diferente do que se viu neste endereço na parada anterior */
       const key = this._stopKey();
       if (key !== this.seenKey) {
         this.seenPrev = new Map([...(this.seenPrev || []), ...(this.seenCur || [])]);
@@ -348,5 +439,6 @@
     _stopKey() { return this.cpu ? this.cpu.insns + ':' + this.cpu.pc : ''; }
   }
 
+  DebuggerPanel.WATCH_ID0 = WATCH_ID0;
   root.DebuggerPanel = DebuggerPanel;
 })(typeof self !== 'undefined' ? self : this);
