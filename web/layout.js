@@ -1,12 +1,15 @@
 /*
  * layout.js — disposição da IDE: splitters arrastáveis (mouse, toque e
  * setas do teclado), painéis recolhíveis (explorador, depurador e painel
- * inferior, que recolhe até a barra de abas), abas do painel inferior e o
- * estado salvo no localStorage ("ksweb-ide:layout").
+ * inferior, que recolhe até a barra de abas), abas do painel inferior e da
+ * coluna direita (Depurador | Ajuda) e o estado salvo no localStorage
+ * ("ksweb-ide:layout").
  *
- *   const lay = new KsLayout({onChange(state), onPanel(name)});
- *   lay.showPanel('terminal' | 'problems' | 'output' | 'disasm')
+ *   const lay = new KsLayout({onChange(state), onPanel(name), onRight(name)});
+ *   lay.showPanel('terminal' | 'problems' | 'output' | 'disasm' | 'reference')
+ *   lay.showRight('debugger' | 'help') / lay.rightTab
  *   lay.collapse('left' | 'right' | 'bottom', on?)   (on omitido = alterna)
+ *   lay.ensureBottom(px)   painel inferior com pelo menos px de altura
  *   lay.isOpen('right')
  */
 (function (root) {
@@ -14,7 +17,8 @@
 
   const KEY = 'ksweb-ide:layout';
   const MIN = { left: 120, right: 220, bottom: 90 };
-  const DEF = { left: 210, right: 420, bottom: 300, no: { left: false, right: false, bottom: false }, panel: 'terminal' };
+  const DEF = { left: 210, right: 420, bottom: 300, no: { left: false, right: false, bottom: false }, panel: 'terminal', rtab: 'debugger' };
+  const RIGHT_TABS = ['debugger', 'help'];
 
   /* Estado salvo, campo a campo: JSON inválido, tipos errados ou valores
    * absurdos (editados à mão, de outra versão) caem no padrão. */
@@ -28,6 +32,7 @@
       if (s.no && typeof s.no === 'object') st.no[k] = s.no[k] === true;
     }
     if (typeof s.panel === 'string') st.panel = s.panel;
+    if (RIGHT_TABS.includes(s.rtab)) st.rtab = s.rtab;
     return st;
   }
 
@@ -54,7 +59,42 @@
           this.showPanel(n.dataset.panel);
         });
       }
+      const rtabs = [...document.querySelectorAll('.rtabs [role="tab"]')];
+      for (const t of rtabs) {
+        t.addEventListener('click', () => this.showRight(t.dataset.right));
+        t.addEventListener('keydown', (e) => {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+          const n = rtabs[(rtabs.indexOf(t) + (e.key === 'ArrowRight' ? 1 : -1) + rtabs.length) % rtabs.length];
+          n.focus();
+          this.showRight(n.dataset.right);
+        });
+      }
       this.showPanel(this.state.panel, true);
+      this.showRight(this.state.rtab, true);
+    }
+
+    get rightTab() { return this.state.rtab; }
+
+    /* Aba da coluna direita; abre a coluna se estava recolhida (exceto na
+     * restauração do estado salvo). */
+    showRight(name, initial) {
+      if (!RIGHT_TABS.includes(name)) name = 'debugger';
+      this.state.rtab = name;
+      for (const t of document.querySelectorAll('.rtabs [role="tab"]')) {
+        const on = t.dataset.right === name;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.tabIndex = on ? 0 : -1;
+      }
+      for (const p of document.querySelectorAll('.rpanel')) p.hidden = p.dataset.right !== name;
+      if (!initial && this.state.no.right) { this.state.no.right = false; this._apply(); }
+      this._save();
+      if (this.opts.onRight) this.opts.onRight(name);
+    }
+
+    ensureBottom(px) {
+      if (this.state.bottom >= px) return;
+      this._size('bottom', px);
+      this._save();
     }
 
     _save() {

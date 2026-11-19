@@ -64,6 +64,7 @@
     if (k === 'F10' && !c && !s) return 'step';
     if (k === 'F11' && !c) return s ? 'stepOut' : 'stepInto';
     if (k === 'F1' && !c && !s) return 'help';
+    if ((k === 'F1' && s && !c) || (c && s && (k === 'h' || k === 'H'))) return 'reference';
     if (c && !s && (k === 'b' || k === 'B')) return 'build';
     if (c && !s && (k === 's' || k === 'S')) return 'save';
     return null;

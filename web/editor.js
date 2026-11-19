@@ -15,7 +15,8 @@
  *     onDocChanges(name, changeSet|null)  toda mudança do texto de um arquivo
  *         (inclusive as programáticas); null = substituído sem ChangeSet,
  *     labels(name, text, line) -> [{name, line, kind, addr?, file?}],
- *     hover({word, type, file, line}) -> Promise<HTMLElement|null>,
+ *     hover({word, type, file, line, pos, end, cursor?}) -> Promise<HTMLElement|null>
+ *         (mouse e Ctrl+K Ctrl+I; cursor = true no atalho),
  *     keys: {Ctrl-b: fn, F9: fn, ...}   (atalhos extras, Mod = Ctrl/Cmd)
  *   });
  *   ed.open(name, text) / close / rename / setText / getText / has
@@ -24,6 +25,9 @@
  *   ed.setBreakpoints(name, lines) / getBreakpoints(name) / toggleBreakpoint()
  *   ed.setPendingLines(name, lines)  breakpoints pendentes (marca vazada)
  *   ed.gotoLine(name, line, col) / focus() / cursor()
+ *   ed.cursorInfo() -> {file, line, col (0-based), lineText}   (painel Ajuda)
+ *   ed.showCursorTip() / hideCursorTip()   tooltip de ajuda no cursor (Ctrl+K Ctrl+I)
+ *   ed.insertLine(text)   linha nova abaixo do cursor (exemplo da referência)
  */
 (function (root) {
   'use strict';
@@ -57,10 +61,15 @@
       this.diags = new Map();
       this.active = null;
       this._silent = false;
+      this._tip = null;
       this._buildExtensions();
       this.view = new CM.EditorView({ parent, state: this._newState('') });
       this.view.dom.setAttribute('aria-label', 'Editor de código assembly');
       this.view.contentDOM.setAttribute('aria-label', 'Código-fonte');
+      this.view.scrollDOM.addEventListener('scroll', () => this.hideCursorTip(), { passive: true });
+      this.view.contentDOM.addEventListener('blur', () => setTimeout(() => {
+        if (this._tip && !this._tip.contains(document.activeElement)) this.hideCursorTip();
+      }, 0));
     }
 
     _buildExtensions() {
@@ -233,14 +242,11 @@
 
       /* ---- ajuda ao passar o mouse ---- */
       const hover = C.hoverTooltip(async (view, pos) => {
-        const line = view.state.doc.lineAt(pos);
-        const w = KsasmLang.wordAt(line.text, pos - line.from);
-        if (!w || !self.opts.hover) return null;
-        const tok = KsasmLang.tokenAt(line.text, Math.min(w.from + 1, w.to));
-        if (tok && (tok.type === 'comment' || tok.type === 'string' || tok.type === 'char')) return null;
-        const dom = await self.opts.hover({ word: w.word, type: tok ? tok.type : null, file: self.active, line: line.number });
+        const q = self._query(view.state, pos);
+        if (!q || !self.opts.hover) return null;
+        const dom = await self.opts.hover(q);
         if (!dom) return null;
-        return { pos: line.from + w.from, end: line.from + w.to, above: true, create: () => ({ dom }) };
+        return { pos: q.pos, end: q.end, above: true, create: () => ({ dom }) };
       }, { hoverTime: 350 });
 
       /* ---- atalhos ---- */
@@ -249,10 +255,14 @@
         extraKeys.push({ key, run: () => { fn(); return true; }, preventDefault: true });
       }
       extraKeys.push({ key: 'F9', run: () => { self.toggleBreakpoint(); return true; } });
+      /* Ctrl+K Ctrl+I (como no VS Code): a ajuda do tooltip na palavra do cursor. */
+      extraKeys.push({ key: 'Mod-k Mod-i', run: () => { self.showCursorTip(); return true; }, preventDefault: true });
+      extraKeys.push({ key: 'Escape', run: () => { if (!self._tip) return false; self.hideCursorTip(); return true; } });
 
       const listener = C.EditorView.updateListener.of((u) => {
         /* antes do _silent: o mapa da imagem carregada precisa de toda mudança */
         if (u.docChanged && self.active !== null && self.opts.onDocChanges) self.opts.onDocChanges(self.active, u.changes);
+        if (self._tip && (u.docChanged || u.selectionSet)) self.hideCursorTip();
         if (self._silent || !self.active) return;
         if (u.docChanged && self.opts.onChange) self.opts.onChange(self.active, u.state.doc.toString());
         if (u.selectionSet || u.docChanged) {
@@ -453,6 +463,80 @@
 
     focus() { this.view.focus(); }
     openSearch() { CM.openSearchPanel(this.view); }
+
+    /* Linha e coluna (0-based, em caracteres) do cursor, com o texto da linha. */
+    cursorInfo() {
+      if (this.active === null) return null;
+      const st = this.view.state, head = st.selection.main.head, l = st.doc.lineAt(head);
+      return { file: this.active, line: l.number, col: head - l.from, lineText: l.text };
+    }
+
+    /* Palavra em pos para a ajuda: {word, type, file, line, pos, end} ou null
+     * (comentário, string, nada). O mesmo para o mouse e o Ctrl+K Ctrl+I. */
+    _query(state, pos) {
+      const line = state.doc.lineAt(pos);
+      const w = KsasmLang.wordAt(line.text, pos - line.from);
+      if (!w) return null;
+      const tok = KsasmLang.tokenAt(line.text, Math.min(w.from + 1, w.to));
+      if (tok && (tok.type === 'comment' || tok.type === 'string' || tok.type === 'char')) return null;
+      return { word: w.word, type: tok ? tok.type : null, file: this.active, line: line.number, pos: line.from + w.from, end: line.from + w.to };
+    }
+
+    /*
+     * Tooltip de ajuda na palavra do cursor (Ctrl+K Ctrl+I). O pacote do
+     * CodeMirror vendorizado não exporta showTooltip, então é um elemento
+     * .cm-tooltip posicionado à mão dentro do editor; fecha com Esc, ao
+     * mover o cursor, editar, rolar ou sair do editor.
+     */
+    async showCursorTip() {
+      this.hideCursorTip();
+      if (this.active === null || !this.opts.hover) return false;
+      const view = this.view, st = view.state;
+      const q = this._query(st, st.selection.main.head);
+      if (!q) return false;
+      const dom = await this.opts.hover(Object.assign({ cursor: true }, q));
+      if (!dom || view.state !== st) return false;
+      const tip = el('div', 'cm-tooltip cm-ks-cursor-tip');
+      tip.setAttribute('role', 'tooltip');
+      tip.addEventListener('mousedown', (e) => { if (!e.target.closest('input,select,textarea')) e.preventDefault(); });
+      tip.appendChild(dom);
+      view.dom.appendChild(tip);
+      this._tip = tip;
+      const c = view.coordsAtPos(q.pos), r = view.dom.getBoundingClientRect();
+      if (!c) { this.hideCursorTip(); return false; }
+      const w = tip.offsetWidth, hgt = tip.offsetHeight;
+      let left = c.left - r.left, top = c.top - r.top - hgt - 4;
+      if (top < 0) top = c.bottom - r.top + 4;
+      if (left + w > r.width - 4) left = Math.max(0, r.width - w - 4);
+      tip.style.left = left + 'px';
+      tip.style.top = top + 'px';
+      return true;
+    }
+
+    hideCursorTip() {
+      if (!this._tip) return;
+      this._tip.remove();
+      this._tip = null;
+    }
+
+    /* Insere uma linha (exemplo da referência) abaixo da linha do cursor, ou
+     * nela se estiver vazia, recuada como instrução; o cursor vai para o fim. */
+    insertLine(text) {
+      if (this.active === null) return false;
+      const st = this.view.state, line = st.doc.lineAt(st.selection.main.head);
+      const t = String(text).replace(/\s+$/, '');
+      const body = /^\s/.test(t) || /^[A-Za-z_][\w.]*:/.test(t) ? t : '        ' + t;
+      const blank = !line.text.trim();
+      const from = blank ? line.from : line.to;
+      const insert = blank ? body : '\n' + body;
+      this.view.dispatch({
+        changes: { from, to: line.to, insert },
+        selection: { anchor: from + insert.length },
+        scrollIntoView: true, userEvent: 'input.paste'
+      });
+      this.view.focus();
+      return true;
+    }
   }
 
   root.KsEditor = KsEditor;

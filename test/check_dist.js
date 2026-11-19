@@ -6,6 +6,7 @@
  *   1. dist/ tem todos os arquivos referenciados por index.html;
  *   2. ksweb-single.html não referencia nada externo, contém o wasm em
  *      base64 idêntico a dist/ksvm.wasm e todos os seus <script> compilam;
+ *   2b. ajuda ao cursor e referência da ISA (isaref.js + fichas) no arquivo único;
  *   3. os scripts sem DOM extraídos do HTML (vt, input, format, vmcore,
  *      exemplos) rodam num contexto vm: o wasm embutido executa o exemplo
  *      embutido "hello";
@@ -88,6 +89,32 @@ test('single-isa-e-exemplos-com-fonte', () => {
     ok(e.files && e.files[e.main], e.name + ': fonte embutido');
     for (const [n, t] of Object.entries(e.files)) for (const inc of t.matchAll(/^\s*\.include\s+"([^"]+)"/gm)) ok(e.files[inc[1]] !== undefined, e.name + ': ' + n + ' inclui ' + inc[1]);
   }
+});
+
+/* Ajuda ao cursor e referência da ISA: isaref.js e as fichas do isa.json
+ * vão no arquivo único e funcionam sem rede (rodam aqui num contexto vm). */
+test('single-ajuda-e-referencia-da-isa', () => {
+  const idx = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
+  for (const id of ['panel-reference', 'ref-root', 'help', 'help-card', 'rtab-help', 'btn-ref']) {
+    ok(idx.includes('id="' + id + '"') && single.includes('id="' + id + '"'), 'elemento #' + id);
+  }
+  ok(/<script src="isaref.js"><\/script>/.test(idx) && fs.existsSync(path.join(dist, 'isaref.js')), 'isaref.js em dist/');
+  const ctx = pureContext();
+  const s = scripts(single).filter((x) => /^\s*\/\* (isa|ksasm-lang|isaref)\.js \*\//.test(x.code));
+  eq(s.length, 3, 'isa.js, ksasm-lang.js e isaref.js inline');
+  for (const { code } of s) vm.runInContext(code, ctx);
+  const r = vm.runInContext(`(() => {
+    const isa = KSWEB_ISA;
+    const t = KsasmLang.helpAt('        fcmp    r1, r2', 9);
+    const c = IsaRef.card(isa, t);
+    return { n: isa.instructions.length, full: isa.instructions.every((i) => i.summary && i.detail.length && i.syntax && i.example && i.encoding),
+      title: c.title, ex: c.example, found: IsaRef.filterInsns(isa, { q: 'fcmp' })[0].mnemonic,
+      cells: IsaRef.opcodeCells(isa).length, conds: isa.conds.length, sys: isa.syscalls.every((x) => x.args && x.ret),
+      extra: [isa.regDocs.length, isa.faults.length, isa.formats.length, isa.flagBits.length, isa.shortForms.length] };
+  })()`, ctx);
+  eq([r.title, r.found, r.cells, r.conds, r.full, r.sys], ['FCMP', 'fcmp', 256, 18, true, true]);
+  ok(r.n >= 100 && /^fcmp r1, r2 +; /.test(r.ex), 'fichas no arquivo único: ' + r.n + ' ' + r.ex);
+  ok(r.extra.every((n) => n > 0), 'registradores, faults, formatos, flags e formas abreviadas: ' + r.extra);
 });
 
 test('single-scripts-compilam', () => {

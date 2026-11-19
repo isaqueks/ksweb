@@ -17,6 +17,9 @@
  *     registradores, breakpoint em linha sem código movido para a próxima,
  *     remover e terminar, recarregar a página (projeto recuperado do
  *     IndexedDB), desassembly com breakpoint por endereço;
+ *   - ajuda ao cursor: o painel Ajuda mostra a ficha do add e do r1 sob o
+ *     cursor, Ctrl+K Ctrl+I abre o tooltip; referência: Ctrl+Shift+H, buscar
+ *     fcmp, abrir a ficha e inserir o exemplo no editor;
  *   - modo simples: um .ksx pelo seletor de arquivo roda direto e mostra o
  *     desassembly; F1 abre a ajuda.
  * Falha em qualquer exceção ou console.error da página. --shots salva PNGs.
@@ -334,6 +337,55 @@ async function scenario(cdp, label) {
     await cdp.eval('document.querySelector("#disasm .dr.code[data-addr=\\"16\\"]").click()');
     await cdp.eval('document.querySelector("#btn-continue").click()');
     await cdp.until(termText + '.includes("fim: código de saída 0")', 5000);
+  });
+  await check('ajuda ao cursor: painel Ajuda acompanha o cursor (add, r1); Ctrl+K Ctrl+I', async () => {
+    await cdp.eval(`(() => { const p = ksweb.state.project;
+      if (!p.has('t/ajuda.ksasm')) p.addFile('t/ajuda.ksasm', '_start:\\n        add     r1, r2, r3\\n        fcmp    r1, r2\\n        halt\\n');
+      ksweb.openTab('t/ajuda.ksasm'); return true; })()`);
+    const cursor = (line, col) => cdp.eval(`(() => { const v = ksweb.editor.view, l = v.state.doc.line(${line}); v.dispatch({ selection: { anchor: l.from + ${col} } }); v.focus(); return true; })()`);
+    await cursor(2, 9);
+    await cdp.eval('document.querySelector("#rtab-help").click()');
+    await cdp.until('!document.querySelector("#help").hidden && document.querySelector("#debugger").hidden', 2000, 'aba Ajuda');
+    await cdp.until('(document.querySelector("#help-card .kcard") || {}).dataset?.key === "add"', 3000, 'ficha do add');
+    const t = await cdp.eval('document.querySelector("#help-card").textContent');
+    for (const want of ['ADD', 'add rd, ra, rb', 'Soma', 'formato R, 4 bytes, opcode 0x30', 'Exemplo', 'Ver na referência']) {
+      if (!t.includes(want)) throw new Error('painel sem "' + want + '": ' + t.slice(0, 200));
+    }
+    await cursor(2, 17);
+    await cdp.until('(document.querySelector("#help-card .kcard") || {}).dataset?.kind === "register"', 3000, 'ficha do r1');
+    await cdp.key('k', { modifiers: 2 });
+    await cdp.key('i', { modifiers: 2 });
+    await cdp.until('(document.querySelector(".cm-ks-cursor-tip") || {}).textContent?.includes("Preservado por")', 3000, 'tooltip no cursor');
+    await cdp.shot(label + '-ajuda');
+    await cdp.key('Escape');
+    await cdp.until('!document.querySelector(".cm-ks-cursor-tip")', 2000, 'Esc fecha o tooltip');
+  });
+  await check('referência: Ctrl+Shift+H, buscar fcmp, expandir, inserir o exemplo no editor', async () => {
+    await cdp.eval('ksweb.editor.focus()');
+    await cdp.key('H', { modifiers: 2 | 8 });
+    await cdp.until('!document.querySelector("#panel-reference").hidden && ksweb.reference && ksweb.reference.section === "reg"', 3000, 'referência aberta no registrador do cursor');
+    await cdp.eval('document.querySelector("#ref-tab-insn").click(); ksweb.reference.focusSearch(); true');
+    await cdp.until('document.activeElement === document.querySelector(".ref-q")', 2000, 'foco na busca');
+    await cdp.type('fcmp');
+    await cdp.until('(document.querySelector(".ref-insns tbody tr") || {}).dataset?.key === "fcmp"', 2000, 'fcmp na primeira linha');
+    await cdp.key('Enter');                              /* foco na primeira linha */
+    await cdp.key('Enter');                              /* abre a ficha */
+    await cdp.until('document.querySelector(".ref-card-row .kcard[data-key=fcmp]")', 2000, 'ficha expandida');
+    const card = await cdp.eval('document.querySelector(".ref-card-row").textContent');
+    if (!/unordered/.test(card) || !/opcode 0xB1/.test(card)) throw new Error('ficha: ' + card.slice(0, 200));
+    const n = await cdp.eval('document.querySelectorAll(".ref-opmap td, .ref-card-row .enc-f").length');
+    if (n !== 5) throw new Error('campos de bits: ' + n);
+    await cdp.shot(label + '-referencia');
+    await cdp.eval('document.querySelector("#ref-tab-opmap").click(); true');
+    await cdp.until('document.querySelectorAll(".ref-opmap td").length === 256', 2000, 'mapa de opcodes');
+    await cdp.shot(label + '-opmap');
+    await cdp.eval('document.querySelector("#ref-tab-insn").click(); true');
+    await cdp.until('document.querySelector(".ref-card-row [data-act=insert]")', 2000, 'ficha continua aberta');
+    await cdp.eval('document.querySelector(".ref-card-row [data-act=insert]").click()');
+    await cdp.until('ksweb.state.project.text("t/ajuda.ksasm").includes("        fcmp r1, r2             ; depois bmi")', 3000, 'exemplo inserido');
+    await cdp.until('ksweb.editor.view.hasFocus', 2000, 'foco volta ao editor');
+    await cdp.eval(`(() => { const n = 't/ajuda.ksasm'; ksweb.state.project.deleteFile(n); ksweb.editor.forget(n);
+      ksweb.layout.showRight('debugger'); ksweb.layout.showPanel('terminal'); ksweb.openTab(ksweb.state.project.main); return true; })()`);
   });
   await check('modo simples: .ksx roda direto com desassembly; F1', async () => {
     const doc = await cdp.send('DOM.getDocument');

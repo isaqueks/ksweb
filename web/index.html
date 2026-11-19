@@ -47,6 +47,7 @@
     <select id="examples" aria-label="Abrir um exemplo"><option value="">Exemplos…</option></select>
     <button id="btn-import" aria-label="Importar arquivos" title="Importar .ksasm, .zip do projeto ou .ksx">Importar</button>
     <button id="btn-export" aria-label="Exportar projeto (.zip)" title="Exportar o projeto como .zip">Exportar</button>
+    <button id="btn-ref" aria-label="Referência da ISA (Ctrl+Shift+H)" title="Referência da ISA: instruções, opcodes, condições, diretivas, syscalls (Ctrl+Shift+H)">ISA</button>
     <button id="btn-options" aria-label="Opções" title="Opções da VM e do terminal">Opções</button>
     <button id="btn-help" aria-label="Ajuda e atalhos (F1)" title="Atalhos e ajuda (F1)">?</button>
   </div>
@@ -91,6 +92,7 @@
         <button role="tab" id="ptab-problems" data-panel="problems" aria-selected="false">Problemas <span id="problem-count" class="count">0</span></button>
         <button role="tab" id="ptab-output" data-panel="output" aria-selected="false">Saída da montagem</button>
         <button role="tab" id="ptab-disasm" data-panel="disasm" aria-selected="false">Desassembly</button>
+        <button role="tab" id="ptab-reference" data-panel="reference" aria-selected="false" title="Referência da ISA (Ctrl+Shift+H)">Referência</button>
         <span class="ptabs-fill"></span>
         <button class="small icon collapse" data-collapse="bottom" aria-label="Recolher painel" title="Recolher">▾</button>
       </div>
@@ -122,16 +124,27 @@
       <div id="panel-disasm" class="ppanel" role="tabpanel" aria-labelledby="ptab-disasm" hidden>
         <div id="disasm" class="dis-list mono" role="listbox" aria-label="Desassembly (clique numa instrução para breakpoint)"></div>
       </div>
+      <div id="panel-reference" class="ppanel" role="tabpanel" aria-labelledby="ptab-reference" hidden>
+        <div id="ref-root" class="ref-root"></div>
+      </div>
     </section>
   </main>
 
   <div class="splitter sv" data-split="right" role="separator" aria-orientation="vertical" aria-label="Redimensionar depurador" tabindex="0"></div>
-  <aside id="pane-right" class="pane pane-right" aria-label="Depurador">
+  <aside id="pane-right" class="pane pane-right" aria-label="Depurador e ajuda">
     <div class="pane-head">
-      <span class="pane-title">Depurador</span>
-      <span class="pane-tools"><button class="small icon collapse" data-collapse="right" aria-label="Recolher depurador" title="Recolher (Ctrl+F9)">»</button></span>
+      <span class="rtabs" role="tablist" aria-label="Coluna direita">
+        <button role="tab" id="rtab-debugger" data-right="debugger" aria-controls="debugger" aria-selected="true">Depurador</button>
+        <button role="tab" id="rtab-help" data-right="help" aria-controls="help" aria-selected="false" title="Ficha da instrução, diretiva, registrador ou rótulo sob o cursor">Ajuda</button>
+      </span>
+      <span class="pane-tools"><button class="small icon collapse" data-collapse="right" aria-label="Recolher coluna direita" title="Recolher (Ctrl+F9)">»</button></span>
     </div>
-    <div id="debugger" class="debugger"></div>
+    <div id="debugger" class="debugger rpanel" data-right="debugger" role="tabpanel" aria-labelledby="rtab-debugger"></div>
+    <div id="help" class="help rpanel" data-right="help" role="tabpanel" aria-labelledby="rtab-help" hidden>
+      <div class="help-head small muted">Acompanha o cursor do editor · <kbd>Ctrl+K</kbd> <kbd>Ctrl+I</kbd> mostra no editor ·
+        <button id="btn-help-ref" class="link" type="button" title="Referência da ISA (Ctrl+Shift+H)">Referência da ISA</button></div>
+      <div id="help-card" class="help-card"></div>
+    </div>
   </aside>
 </div>
 
@@ -196,15 +209,18 @@
       <tr><th>Ctrl+F</th><td>Buscar / substituir no arquivo</td></tr>
       <tr><th>Ctrl+/</th><td>Comentar / descomentar linhas (<code>;</code>)</td></tr>
       <tr><th>Ctrl+Espaço</th><td>Sugestões (instruções, registradores, rótulos)</td></tr>
-      <tr><th>Ctrl+F9</th><td>Mostrar/esconder o depurador</td></tr>
+      <tr><th>Ctrl+K Ctrl+I</th><td>Ajuda da palavra sob o cursor num tooltip (Esc fecha)</td></tr>
+      <tr><th>Ctrl+Shift+H</th><td>Referência da ISA, aberta na instrução do cursor (também Shift+F1)</td></tr>
+      <tr><th>Ctrl+F9</th><td>Mostrar/esconder a coluna direita (depurador e ajuda)</td></tr>
       <tr><th>F1</th><td>Esta ajuda</td></tr>
       <tr><th>Ctrl+Alt+C</th><td>Interromper a VM (no terminal)</td></tr>
     </table>
     <p class="small muted">No terminal em modo raw as teclas vão ao programa, exceto F8, F10, Ctrl+F9 e Ctrl+Alt+C.
       F11 e Ctrl+Shift+F5 podem ser capturados pelo navegador em alguns sistemas: use os botões.
       Arraste um <code>.ksx</code> para a página para executá-lo direto, ou arquivos <code>.ksasm</code>/<code>.zip</code> para importá-los.
+      A aba <strong>Ajuda</strong> da coluna direita mostra a ficha do que está sob o cursor; a aba <strong>Referência</strong> do painel inferior traz todas as instruções, o mapa de opcodes, condições, pseudo-instruções, diretivas, registradores, flags, formatos, faults e syscalls.
       Documentação: <code>docs/07-ide.md</code>.</p>
-    <p class="dlg-actions"><button value="close" class="primary">Fechar</button></p>
+    <p class="dlg-actions"><button type="button" id="btn-open-ref">Referência da ISA</button> <button value="close" class="primary">Fechar</button></p>
   </form>
 </dialog>
 
@@ -220,6 +236,7 @@
 <script src="isa.js"></script>
 <script src="vendor/codemirror.bundle.js"></script>
 <script src="ksasm-lang.js"></script>
+<script src="isaref.js"></script>
 <script src="asmtools.js"></script>
 <script src="project.js"></script>
 <script src="editor.js"></script>

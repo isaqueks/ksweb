@@ -17,7 +17,7 @@
 (function () {
   'use strict';
   /* global TerminalView, DebuggerPanel, KsFormat, parseSymbols, KSWEB_EXAMPLES, KSWEB_ISA, pageShortcut,
-     ideShortcut, KsEditor, KsLayout, KsProject, KsasmLang, AsmTools */
+     ideShortcut, KsEditor, KsLayout, KsProject, KsasmLang, AsmTools, IsaRef */
   const $ = (s) => document.querySelector(s);
   const F = KsFormat;
   const { Project, ProjectStore } = KsProject;
@@ -320,7 +320,7 @@
       if ($('#opt-regs').checked && m.cpu) sys(F.regsDump(m.cpu).replace(/\n$/, ''));
       setState('done', 'código ' + info.code);
       if (info.kind === 'fault') {
-        if ($('#opt-dbg-on-fault').checked) layout.collapse('right', false);
+        if ($('#opt-dbg-on-fault').checked) { layout.collapse('right', false); layout.showRight('debugger'); }
         showPc(info.fault ? info.fault.pc : m.pc, true);
       } else {
         editor.setDebugLine(null, null);
@@ -703,7 +703,7 @@
     S.imageVersion = S.built.version;
     S.run = S.built;
     if ($('#opt-clear').checked) term.clear();
-    if (stopAtEntry) layout.collapse('right', false);
+    if (stopAtEntry) { layout.collapse('right', false); layout.showRight('debugger'); }
     else layout.showPanel('terminal');
     loadImage(r.image, S.project.main.replace(/\.[^./]*$/, '') + '.ksx', !stopAtEntry);
   }
@@ -1182,53 +1182,150 @@
     return info ? info.symByName.get(name) : null;
   }
 
+  /* Número nas bases (tooltip e painel Ajuda). */
+  function numberInto(box, word) {
+    const s = word.replace(/_/g, '');
+    const v = /^0[bB]/.test(s) ? parseInt(s.slice(2), 2) : Number(s);
+    if (!Number.isFinite(v)) return false;
+    const u = v >>> 0;
+    box.append(h('div', { class: 't' }, word),
+      h('div', { class: 'x' }, '0x' + u.toString(16).toUpperCase() + ' · ' + u + ' · ' + (u | 0) + ' (com sinal) · 0b' + u.toString(2)));
+    return true;
+  }
+
+  /* Valor atual de um registrador (se há programa carregado). */
+  function regValueTable(name) {
+    const r = KSWEB_ISA.registers.find((x) => x.name === name);
+    if (!r || !dbg.cpu || !S.loaded) return null;
+    const v = r.index === 0 ? 0 : dbg.cpu.r[r.index] >>> 0;
+    return h('table', { class: 'ktip-rows' }, h('tr', {}, h('td', { class: 'k' }, 'valor'), h('td', {}, hex8(v) + ' = ' + (v | 0) + (dbg.regChanged(r.index) ? '  (alterado)' : ''))),
+      h('tr', {}, h('td', { class: 'k' }, 'float'), h('td', {}, F.f32Str(v))));
+  }
+
+  /* Tooltip do editor (mouse e Ctrl+K Ctrl+I): ficha compacta do isa.json,
+   * rótulo com endereço/seção/conteúdo, número nas bases. */
   async function hover(q) {
-    const d = KsasmLang.describe(q.word, q.type);
     const box = h('div', { class: 'ks-hover' });
-    if (/^(0[xXbB][0-9a-fA-F_]+|\d[\d_]*)$/.test(q.word)) {
-      const s = q.word.replace(/_/g, '');
-      const v = /^0[bB]/.test(s) ? parseInt(s.slice(2), 2) : Number(s);
-      if (!Number.isFinite(v)) return null;
-      const u = v >>> 0;
-      box.append(h('div', { class: 't' }, q.word),
-        h('div', { class: 'x' }, '0x' + u.toString(16).toUpperCase() + ' · ' + u + ' · ' + (u | 0) + ' (com sinal) · 0b' + u.toString(2)));
-      return box;
+    const t = KsasmLang.target(q.word, q.type);
+    if (!t) return null;
+    if (t.kind === 'number') return numberInto(box, q.word) ? box : null;
+    if (t.kind === 'label') return (await labelInto(box, q.word, q.file)) ? box : null;
+    const c = IsaRef.card(KSWEB_ISA, t);
+    if (!c) return null;
+    const tip = IsaRef.renderTip(document, c, { onRef: (r) => openReference(r), hint: q.cursor ? 'Esc fecha' : 'Ctrl+Shift+H' });
+    if (t.kind === 'register') { const tb = regValueTable(t.key); if (tb) tip.append(tb); }
+    return tip;
+  }
+
+  /* Rótulo: endereço, seção, onde foi definido e (com a VM parada) o
+   * conteúdo da memória. false se o rótulo não existe. */
+  async function labelInto(box, word, file, goto) {
+    const s = symbolInfo(word);
+    const local = KsasmLang.scanLabels(editor.getText(file) || '').find((l) => l.name === word);
+    if (!s && !local) return false;
+    box.append(h('div', { class: 't' }, word + (s ? '  ' + (s.kind === 'equ' ? '= ' : '@ ') + hex8(s.addr) : '')));
+    const where = s && s.file ? s.file + ':' + s.line : local ? file + ':' + local.line : '';
+    box.append(h('div', { class: 'x' }, (s ? (s.kind === 'equ' ? 'constante' : 'rótulo em ' + s.kind) + (s.global ? ' (global)' : '') : 'rótulo (monte para ver o endereço)') + (where ? ' · definido em ' + where : '')));
+    if (goto && where) {
+      const [wf, wl] = s && s.file ? [s.file, s.line] : [file, local.line];
+      box.append(h('p', { class: 'kcard-links' }, h('button', { type: 'button', class: 'link', onclick: () => { openTab(wf); editor.gotoLine(wf, wl, 1); } }, 'Ir para a definição →')));
     }
-    if (!d) return null;
-    if (d.kind === 'label') {
-      const s = symbolInfo(q.word);
-      const local = KsasmLang.scanLabels(editor.getText(q.file) || '').find((l) => l.name === q.word);
-      if (!s && !local) return null;
-      box.append(h('div', { class: 't' }, q.word + (s ? '  ' + (s.kind === 'equ' ? '= ' : '@ ') + hex8(s.addr) : '')));
-      const where = s && s.file ? s.file + ':' + s.line : local ? q.file + ':' + local.line : '';
-      box.append(h('div', { class: 'x' }, (s ? (s.kind === 'equ' ? 'constante' : 'rótulo em ' + s.kind) + (s.global ? ' (global)' : '') : 'rótulo (monte para ver o endereço)') + (where ? ' · definido em ' + where : '')));
-      if (s && s.kind !== 'equ' && S.loaded && S.imageSource === 'build' && (!isActive() || S.vmState === 'waiting')) {
-        const m = await memRead(s.addr, 32);
-        if (m && m.mask[0]) {
-          const b = m.bytes, ok4 = m.mask[3];
-          const w = ok4 ? (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0 : null;
-          let n = 0;
-          while (n < 32 && m.mask[n] && b[n]) n++;
-          const str = new TextDecoder().decode(b.slice(0, n)).replace(/\n/g, '\\n').replace(/[\x00-\x1f]/g, '.');
-          const t = h('table', {});
-          if (w !== null) t.append(h('tr', {}, h('td', {}, 'word'), h('td', {}, hex8(w) + ' = ' + (w | 0) + ' · float ' + F.f32Str(w))));
-          t.append(h('tr', {}, h('td', {}, 'bytes'), h('td', {}, Array.from(b.slice(0, 8)).map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join(' '))));
-          if (str) t.append(h('tr', {}, h('td', {}, 'texto'), h('td', {}, '"' + str + '"')));
-          box.append(t);
-        }
+    if (s && s.kind !== 'equ' && S.loaded && S.imageSource === 'build' && (!isActive() || S.vmState === 'waiting')) {
+      const m = await memRead(s.addr, 32);
+      if (m && m.mask[0]) {
+        const b = m.bytes, ok4 = m.mask[3];
+        const w = ok4 ? (b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)) >>> 0 : null;
+        let n = 0;
+        while (n < 32 && m.mask[n] && b[n]) n++;
+        const str = new TextDecoder().decode(b.slice(0, n)).replace(/\n/g, '\\n').replace(/[\x00-\x1f]/g, '.');
+        const t = h('table', {});
+        if (w !== null) t.append(h('tr', {}, h('td', {}, 'word'), h('td', {}, hex8(w) + ' = ' + (w | 0) + ' · float ' + F.f32Str(w))));
+        t.append(h('tr', {}, h('td', {}, 'bytes'), h('td', {}, Array.from(b.slice(0, 8)).map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join(' '))));
+        if (str) t.append(h('tr', {}, h('td', {}, 'texto'), h('td', {}, '"' + str + '"')));
+        box.append(t);
       }
-      return box;
     }
-    box.append(h('div', { class: 't' }, d.title));
-    if (d.signature) box.append(h('div', { class: 'sig' }, d.signature));
-    if (d.desc) box.append(h('div', { class: 'd' }, d.desc));
-    if (d.detail) box.append(h('div', { class: 'x' }, d.detail));
-    if (d.kind === 'register' && dbg.cpu && d.index !== null && S.loaded) {
-      const v = d.index === 0 ? 0 : dbg.cpu.r[d.index] >>> 0;
-      box.append(h('table', {}, h('tr', {}, h('td', {}, 'valor'), h('td', {}, hex8(v) + ' = ' + (v | 0) + (dbg.regChanged(d.index) ? '  (alterado)' : ''))),
-        h('tr', {}, h('td', {}, 'float'), h('td', {}, F.f32Str(v)))));
+    return true;
+  }
+
+  /* ---- painel Ajuda (coluna direita) e referência da ISA ---- */
+
+  const HELP = { timer: null, key: null };
+  let ref = null;
+
+  function helpVisible() { return layout && layout.isOpen('right') && layout.rightTab === 'help'; }
+
+  /* Debounce: só consulta o isa.json depois que o cursor para (nada é montado). */
+  function scheduleHelp() {
+    if (!helpVisible()) return;
+    clearTimeout(HELP.timer);
+    HELP.timer = setTimeout(() => updateHelp(false), 120);
+  }
+
+  function updateHelp(force) {
+    HELP.timer = null;
+    if (!helpVisible()) return;
+    const ci = S.ksxMode ? null : editor.cursorInfo();
+    const t = ci ? KsasmLang.helpAt(ci.lineText, ci.col, { line: true }) : null;
+    const box = $('#help-card');
+    if (!t) {                                        /* fica a última ficha */
+      if (HELP.key === null || force) {
+        HELP.key = '';
+        box.replaceChildren(h('p', { class: 'muted help-empty' }, 'Posicione o cursor sobre uma instrução, pseudo-instrução, diretiva, registrador, condição de desvio (beq, b.lt…), syscall ou rótulo.'));
+      }
+      return;
     }
-    return box;
+    const key = t.kind + ':' + t.key + (t.kind === 'label' ? '@' + ci.file : '');
+    if (!force && key === HELP.key) return;
+    HELP.key = key;
+    if (t.kind === 'number' || t.kind === 'label') {
+      const b = h('div', { class: 'ks-hover help-misc' });
+      box.replaceChildren(b);
+      if (t.kind === 'number') numberInto(b, t.key);
+      else labelInto(b, t.key, ci.file, true).then((okk) => { if (!okk && HELP.key === key) b.append(h('p', { class: 'muted' }, 'Rótulo "' + t.key + '" não definido.')); });
+      return;
+    }
+    const c = IsaRef.card(KSWEB_ISA, t);
+    if (!c) { box.replaceChildren(); return; }
+    const card = IsaRef.renderCard(document, c, { onRef: (r) => openReference(r), onInsert: insertExample, onCopy: copyText, headingLevel: 3 });
+    if (t.kind === 'register') { const tb = regValueTable(t.key); if (tb) card.append(tb); }
+    box.replaceChildren(card);
+  }
+
+  function ensureRef() {
+    if (!ref) ref = new IsaRef.Reference($('#ref-root'), { doc: document, isa: KSWEB_ISA, onInsert: insertExample, onCopy: copyText });
+    return ref;
+  }
+
+  /* Abre a referência no painel inferior, posicionada em target ({kind,
+   * key} ou {section, key}); sem target, na busca. */
+  function openReference(target) {
+    editor.hideCursorTip();
+    layout.showPanel('reference');
+    layout.ensureBottom(Math.min(340, Math.round(window.innerHeight * 0.45)));
+    const r = ensureRef();
+    if (target && r.show(target)) return;
+    r.focusSearch();
+  }
+
+  /* Ctrl+Shift+H: a ficha da palavra sob o cursor, se o foco está no editor. */
+  function cursorTarget() {
+    if (S.ksxMode || !editor.view.hasFocus) return null;
+    const ci = editor.cursorInfo();
+    const t = ci && KsasmLang.helpAt(ci.lineText, ci.col);
+    return t && t.kind !== 'label' && t.kind !== 'number' ? t : null;
+  }
+
+  function insertExample(text) {
+    if (S.ksxMode || !editor.active) { status('abra um arquivo do projeto para inserir o exemplo'); return; }
+    editor.insertLine(text);
+    status('exemplo inserido em ' + editor.active);
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => status('copiado: ' + text.trim()), () => status('não foi possível copiar (permissão do navegador)'));
+    } else status('a área de transferência não está disponível');
   }
 
   /* Rótulos para o autocomplete: os do arquivo e os símbolos da montagem. */
@@ -1262,6 +1359,7 @@
       case 'build': build(false); break;
       case 'save': scheduleSave(true); break;
       case 'help': if (!$('#dlg-help').open) $('#dlg-help').showModal(); break;
+      case 'reference': openReference(cursorTarget()); break;
       default: break;
     }
   }
@@ -1346,17 +1444,21 @@
     });
     editor = new KsEditor($('#editor'), {
       onChange: onEdit,
-      onCursor: (l, c) => { $('#sb-pos').textContent = 'Ln ' + l + ', Col ' + c; },
+      onCursor: (l, c) => { $('#sb-pos').textContent = 'Ln ' + l + ', Col ' + c; scheduleHelp(); },
       onBreakpoints: onEditorBreakpoints,
       onDocChanges,
       labels: labelsFor,
       hover,
       keys: { 'Mod-b': () => doShortcut('build'), 'Mod-s': () => doShortcut('save') }
     });
-    layout = new KsLayout({ onPanel: (name) => {
-      if (name === 'terminal') setTimeout(() => term.fitToContainer(), 0);
-      if (name === 'disasm') setTimeout(() => renderDisasmPc(S.loaded && !isActive() ? S.pc : null), 0);
-    } });
+    layout = new KsLayout({
+      onPanel: (name) => {
+        if (name === 'terminal') setTimeout(() => term.fitToContainer(), 0);
+        if (name === 'disasm') setTimeout(() => renderDisasmPc(S.loaded && !isActive() ? S.pc : null), 0);
+        if (name === 'reference') ensureRef();
+      },
+      onRight: (name) => { if (name === 'help') setTimeout(() => updateHelp(true), 0); }
+    });
 
     $('#btn-build').addEventListener('click', () => build(false));
     $('#btn-run').addEventListener('click', run);
@@ -1372,6 +1474,9 @@
     $('#btn-export').addEventListener('click', exportZip);
     $('#btn-options').addEventListener('click', () => $('#dlg-options').showModal());
     $('#btn-help').addEventListener('click', () => $('#dlg-help').showModal());
+    $('#btn-ref').addEventListener('click', () => openReference(null));
+    $('#btn-help-ref').addEventListener('click', () => openReference(null));
+    $('#btn-open-ref').addEventListener('click', () => { $('#dlg-help').close(); openReference(null); });
     $('#btn-menu').addEventListener('click', async (e) => {
       e.stopPropagation();
       const m = $('#menu');
@@ -1463,7 +1568,9 @@
   /* API para testes de navegador e depuração no console. */
   window.ksweb = {
     get state() { return S; }, get editor() { return editor; }, get layout() { return layout; },
-    build, run, cont, pause, restart, stepMode, openTab, openKsx, setMain, breakpoints: breakpointList
+    get reference() { return ref; },
+    build, run, cont, pause, restart, stepMode, openTab, openKsx, setMain, breakpoints: breakpointList,
+    openReference, updateHelp
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
