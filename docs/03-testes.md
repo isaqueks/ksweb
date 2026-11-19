@@ -12,15 +12,16 @@ pelo Makefile da ksvm2.
 | `test/test_lineedit.js` | 9 | teclado → bytes, editor de linha (`web/input.js`) com eco pelo VT e atalhos da IDE |
 | `test/test_terminal.js` | 5 | `TerminalView` (`web/terminal.js`) num DOM falso: teclado, mensagens do runner, HTML escapado |
 | `test/test_wasm_tools.js` | 58 | `ksas.wasm`/`ksdis.wasm` pelo shim WASI × `ksas`/`ksdis` nativos |
-| `test/test_isa.js` | 9 | `isa.json` × `isa.def` e as tabelas do ksas |
+| `test/test_isa.js` | 16 | `isa.json` × `isa.def` e as tabelas do ksas; fichas do `tools/isa-doc.md` completas e exemplos montados pelo `ksas.wasm` |
+| `test/test_isaref.js` | 11 | busca/filtro/ordenação da referência, fichas, mapa de opcodes, "token sob o cursor → ficha" e o render da referência num DOM falso |
 | `test/test_asmtools.js` | 23 | erros (nomes normalizados), alcance dos `.include`, listing, mapa linha ↔ endereço, breakpoint movido, tokenizer, autocomplete, ajuda |
 | `test/test_project.js` | 11 | explorador, IndexedDB falso e fallbacks, `.zip` e inflate |
 | `test/test_srcmap.js` | 9 | linha atual ↔ linha da montagem com ChangeSets reais do CodeMirror (imagem desatualizada) |
 | `test/test_worker.js` | 5 | o `worker.js` num contexto vm: passo por cima/sair da função com entrada pendente, Passo N, breakpoint |
-| `test/check_dist.js` | 21 | `dist/`, `ksweb-single.html` e os dois workers pelo protocolo de mensagens |
+| `test/check_dist.js` | 22 | `dist/`, `ksweb-single.html` e os dois workers pelo protocolo de mensagens |
 | `test/browser_smoke.js` | opcional | a IDE num Chrome/Edge headless (`make test-browser`) |
 
-Total do `make test`: 320 casos em 12 suítes.
+Total do `make test`: 339 casos em 13 suítes.
 
 ## `run_node.js`
 
@@ -136,6 +137,54 @@ condição certo; cada syscall por nome monta com o número certo; cada
 registrador e apelido vai para o campo certo; registradores especiais; e o
 **snippet de cada instrução**, com operandos de exemplo, é aceito pelo
 `ksas.wasm`.
+
+As **fichas** (`tools/isa-doc.md`, mescladas pelo `mkisa.js`): todo opcode do
+`isa.def` tem `summary` (uma frase terminada em ponto), `detail` (2 a 5
+linhas), `syntax` (começando pelo mnemônico), `example` com comentário,
+`group` conhecido e `encoding` cujos campos cobrem os 32 bits sem buraco (o
+formato L com o `imm32` na palavra seguinte); o **exemplo de cada
+instrução** monta no `ksas.wasm` dentro de um `.text` mínimo (com `_start`
+antes e `fim:` depois) e a primeira palavra gerada tem o **opcode da
+ficha**; os exemplos dos 36 desvios (com o código de condição certo), das
+pseudo-instruções, das formas abreviadas e das diretivas também montam; as
+16 condições têm flags testadas e significado depois de CMP e de FCMP (CS e
+CC como apelidos de HS e LO); toda entrada de registrador aponta uma ficha
+que a cobre; flags (`setBy` coerente: V em ADD e FCMP, não em SHL), formatos
+(32 bits, contagem); faults na ordem e com os códigos do enum de
+`fault.h` (saída 70 + código), syscalls com argumentos e retorno, erros de
+syscall iguais aos de `syscall.h`; faixas do mapa de opcodes do doc 04
+§5.8 sem instrução dentro; e o cabeçalho do `isa-doc.md` aponta o doc 04
+como fonte normativa.
+
+## `test_isaref.js`
+
+`web/isaref.js` e `KsasmLang.helpAt` em Node, com um DOM falso mínimo
+(que lança se alguém usar `innerHTML`):
+
+- **busca**: sem filtro, as 103 por opcode ou por nome; mnemônico exato
+  primeiro e depois os prefixos (`ADD` → `add addi addl …`); opcode
+  (`0x3A`, `b1`, prefixo `0xa`); palavra da descrição (`satura`), sem
+  acento nem maiúsculas, várias palavras com E; filtros de grupo e formato
+  combinados com a busca;
+- **mapa de opcodes**: 256 células, ocupadas = instruções, removido (0x04),
+  livre, reservado, plataforma e inválido (0xFF);
+- **fichas** de instrução, desvio (inclusive apelido), condição, pseudo,
+  diretiva, registrador e apelido, registrador especial, syscall e fault,
+  com a posição na referência;
+- **token sob o cursor → ficha**: mnemônico (meio, fim, maiúsculas),
+  registrador e apelido, pseudo, diretiva, `beq`/`b.ge`/`bcs`, rótulo
+  (operando e definição), `b` como pseudo, syscall e SR pelo nome, número,
+  comentário e string (sem ajuda; com `{line: true}` cai no mnemônico da
+  linha), mnemônico desconhecido;
+- **render**: ficha com sintaxe, resumo, crases em `<code>`, flags, campos
+  de bits proporcionais e os botões inserir/copiar/referência; tooltip com
+  sintaxe, resumo, codificação e flags; a **referência** com uma linha por
+  instrução, `<th scope>`, expansão (aria-expanded/aria-controls, ficha logo
+  abaixo, inserir exemplo), busca, filtros e ordenação, Enter na busca,
+  `show()` que limpa filtros e foca a linha, todas as seções (linhas
+  esperadas, `th` com `scope`), `show()` de condição/registrador/syscall/
+  diretiva/SR e o mapa de opcodes (16 × 16, tabindex itinerante, setas,
+  clique abre a ficha).
 
 ## `test_asmtools.js`
 
@@ -290,6 +339,14 @@ DevTools Protocol (`make test-browser`, ou pelo Node do Windows:
   breakpoint da linha do fonte; o pc fica destacado no desassembly), e o
   **modo simples** (`hello.ksx` pelo seletor de arquivo roda direto e o
   centro mostra o desassembly); F1 abre e Esc fecha a ajuda;
+- **ajuda ao cursor**: num arquivo novo, o cursor sobre `add` faz a aba
+  **Ajuda** mostrar a ficha do ADD (sintaxe, resumo, codificação, exemplo,
+  link para a referência) e sobre `r1` a do registrador; Ctrl+K Ctrl+I abre
+  o tooltip no cursor e Esc o fecha; **referência**: Ctrl+Shift+H com o
+  cursor no `r1` abre a seção Registradores; na aba Instruções a busca
+  `fcmp` (teclas de verdade) põe o FCMP na primeira linha, Enter + Enter
+  abrem a ficha (campos de bits do formato R), o mapa de opcodes tem 256
+  células e "Inserir no editor" grava o exemplo no arquivo;
 - duas abas da IDE no mesmo banco: a que só está aberta, ao recarregar, não
   apaga o que a outra salvou;
 - erro no principal não gera erros falsos no arquivo incluído aberto;

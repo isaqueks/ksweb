@@ -9,12 +9,12 @@ código-fonte. Funciona offline, inclusive no arquivo único
 ```
 ┌─ barra: ☰ Projeto · nome / arquivo · Montar ▶Executar Depurar ■Parar ↻Reiniciar · Continuar Passo Passo-dentro Sair · Exemplos Importar Exportar Opções ? ┐
 ├──────────────┬─────────────────────────────────────────────────┬──────────────────────────┤
-│ Arquivos     │ abas: ★main.ksasm  lib/io.ksasm                 │ Depurador                │
+│ Arquivos     │ abas: ★main.ksasm  lib/io.ksasm                 │ Depurador | Ajuda        │
 │  lib/io.ksasm│ ┌─────────────────────────────────────────────┐ │  Registradores           │
 │  main.ksasm ★│ │ editor (CodeMirror 6)                       │ │  Watch                   │
 │              │ │ ● breakpoint  ➤ linha atual  · gera código  │ │  Breakpoints             │
 │              │ └─────────────────────────────────────────────┘ │  Pilha                   │
-│              │ Terminal | Problemas | Saída da montagem | Desassembly │  Memória · Trace  │
+│              │ Terminal | Problemas | Saída | Desassembly | Referência │ Memória · Trace  │
 ├──────────────┴─────────────────────────────────────────────────┴──────────────────────────┤
 │ estado · pc · instruções e instr/s · mensagem ·              Ln, Col · arquivo · imagem · persistência │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -49,7 +49,8 @@ código-fonte. Funciona offline, inclusive no arquivo único
    rola para o centro; os registradores alterados ficam amarelos; passar o
    mouse num registrador mostra o valor (hex, decimal, float); num rótulo,
    o endereço, onde foi definido e o conteúdo (word, bytes, texto); numa
-   instrução, formato, operandos, flags e descrição; num número, as bases.
+   instrução, a ficha compacta (sintaxe, resumo, codificação, flags); num
+   número, as bases. Veja "Ajuda ao cursor e referência da ISA" abaixo.
 7. **Passos**: **Passo** (F10) passa por cima de `call`/`callr` (a VM roda
    até voltar à instrução seguinte; recursão e breakpoints no meio são
    respeitados); **Passo-dentro** (F11) executa uma instrução; **Sair**
@@ -70,6 +71,55 @@ código-fonte. Funciona offline, inclusive no arquivo único
    é carregada (Executar/Reiniciar).
 9. **Watch**: digite um rótulo ou endereço; a cada parada mostra o endereço
    e o conteúdo como word, byte, float e string.
+
+### Ajuda ao cursor e referência da ISA
+
+As fichas vêm do `isa.json` (gerado do `isa.def` e de `tools/isa-doc.md`,
+escrito a partir do doc 04 da ksvm2, 01-arquitetura §8); nada é montado
+para mostrá-las, então a digitação não espera por elas.
+
+- **Tooltip** (passar o mouse, ou **Ctrl+K Ctrl+I** com o cursor na
+  palavra; Esc, mover o cursor, editar ou rolar fecham): título com opcode,
+  formato e grupo; sintaxe (todas as formas aceitas); resumo; codificação
+  (`formato R, 4 bytes, opcode 0x30; rc = rb, rb = ra, ra = rd`) e as flags
+  que a instrução altera; "ver na referência". Num registrador, também o
+  papel na ABI e, com programa carregado, o valor atual; num rótulo,
+  endereço, seção, onde foi definido e o conteúdo da memória; numa syscall
+  ou registrador especial (`syscall PUTC`, `mfsr r1, FLAGS`), a ficha dele.
+- **Painel Ajuda** (aba da coluna direita, ao lado do Depurador): acompanha
+  o cursor do editor com debounce de 120 ms e mostra a **ficha completa**
+  do que está sob ele — mnemônico, pseudo-instrução, diretiva, registrador
+  (e apelido), condição de desvio (`beq`, `b.lt`, `bcs`…, com as flags
+  testadas e o significado depois de CMP e de FCMP), syscall, registrador
+  especial — com sintaxe, resumo, detalhe (semântica exata, flags, casos
+  especiais), flags, codificação com o **desenho dos campos de bits**,
+  exemplo (**Inserir no editor** e **Copiar**) e **Ver na referência**.
+  Sobre um rótulo, endereço/seção/valor e "Ir para a definição". Com o
+  cursor num espaço, vírgula, comentário ou string, vale o mnemônico da
+  linha; numa linha sem nada, fica a última ficha. Depurar (parar na
+  entrada) e um fault trazem de volta a aba Depurador.
+- **Referência** (aba do painel inferior; **Ctrl+Shift+H**, Shift+F1, o
+  botão **ISA** da barra ou o botão do F1): seções navegáveis à esquerda
+  (setas ↑↓): **Instruções** — busca instantânea por mnemônico, opcode
+  (`0x3A`, `b1`, `0xa` = 0xA0–0xAF) ou palavra da descrição, sem
+  diferenciar acentos e maiúsculas, várias palavras = todas; filtros por
+  grupo e formato; ordem por opcode ou nome; tabela mnemônico | opcode |
+  formato | sintaxe | flags | resumo; clicar na linha (ou Enter/Espaço no
+  mnemônico; ↑↓ entre linhas, Enter na busca vai para a primeira) abre a
+  ficha completa logo abaixo, com o exemplo para inserir ou copiar; **Mapa
+  de opcodes** (grade 16 × 16: ocupado, livre, removido, reservado,
+  plataforma, inválido; o mouse ou as setas mostram o mnemônico, Enter ou
+  clique abre a ficha); **Condições (Bcc)**; **Pseudo-instruções** e as
+  formas abreviadas que o assembler aceita (`not rd`, `add rd, ra, imm`,
+  `push r1, r2`, `[rótulo]`…); **Diretivas**; **Registradores** (papel,
+  apelidos, ABI do kscc, quem preserva); **Registradores especiais**;
+  **Flags** (e quem as altera); **Formatos** (campos R/I/L/B/J);
+  **Faults** (código, causa, `fault_addr`, código de saída); **Syscalls**
+  (número, grupo, argumentos, retorno) e os códigos de erro em r2. O
+  Ctrl+Shift+H com o foco no editor abre a referência já na ficha da
+  palavra do cursor; "ver na referência" do tooltip e do painel também.
+  Tudo funciona no arquivo único e offline, nos temas claro e escuro, com
+  `<th scope>` nas tabelas e foco por teclado.
 
 ### Modo simples
 Arrastar um `.ksx` para a página (ou ☰ → *Abrir e executar um .ksx*) roda a
@@ -97,7 +147,9 @@ Reabrir um exemplo reabre o mesmo projeto, com as edições.
 | Ctrl+F | buscar e substituir (Ctrl+G próxima, Esc fecha) |
 | Ctrl+/ | comentar/descomentar com `;` |
 | Ctrl+Espaço | sugestões |
-| Ctrl+F9 | mostrar/esconder o depurador |
+| Ctrl+K Ctrl+I | tooltip de ajuda na palavra do cursor (Esc fecha) |
+| Ctrl+Shift+H / Shift+F1 | referência da ISA (na ficha da palavra do cursor, se o foco está no editor) |
+| Ctrl+F9 | mostrar/esconder a coluna direita (depurador e ajuda) |
 | F1 | ajuda com os atalhos |
 | Ctrl+Alt+C / Pause | interromper a VM (no terminal) |
 
@@ -107,6 +159,14 @@ Ctrl+Alt+C continuam com a página (06-terminal.md). Em modo linha, os
 atalhos que o editor de linha não usa funcionam também no terminal. F11 e
 Ctrl+Shift+F5 podem ser tomados pelo navegador ou pelo sistema em algumas
 configurações: use os botões.
+
+Escolha dos atalhos da ajuda: **Ctrl+Q** (o "documentação rápida" das IDEs
+JetBrains) não foi usado porque fecha o Firefox no Linux e o Chrome no
+macOS (Cmd+Q) sem a página poder impedir; **Ctrl+K Ctrl+I** é o do VS Code,
+e o Ctrl+K sozinho não tem uso no CodeMirror (o Ctrl+I sozinho continua
+sendo o "selecionar o nó pai" dele). **Ctrl+Shift+H** não colide com o
+CodeMirror; no Firefox abre o histórico, mas a página o intercepta (o
+Shift+F1 é a alternativa).
 
 ## Autocomplete
 

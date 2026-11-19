@@ -180,14 +180,21 @@ tamanho de RAM inválido.
   `ksasm-lang.js`; autocomplete e ajuda pelas funções puras dele.
 - `ksasm-lang.js` (sem DOM, testado em Node): tokenizer no formato do
   `StreamParser` (regras léxicas do `lexer.c` do ksas), rótulos do arquivo,
-  contexto e opções de autocomplete, palavra sob o cursor e texto de ajuda,
-  a partir do `isa.json`.
+  contexto e opções de autocomplete, palavra sob o cursor e o alvo da ajuda
+  (`target`, `helpAt`: token sob o cursor → `{kind, key}` da ficha), a
+  partir do `isa.json`.
+- `isaref.js` (`IsaRef`): fichas da ISA e a referência. Parte pura (busca,
+  filtro e ordenação, ficha normalizada de cada tipo, mapa de opcodes) e
+  render em DOM que recebe o `document` (painel Ajuda, tooltip, aba
+  Referência), todo texto por `textContent`; testado em Node com um DOM
+  falso (`test_isaref.js`).
 - `asmtools.js` (sem DOM): monta pelo shim, interpreta erros, listing e
   desassembly, e constrói o **mapa linha ↔ endereço** (§7).
 - `project.js` (sem DOM): modelo do projeto, `ProjectStore` (IndexedDB →
   localStorage → memória) e `.zip` sem dependências.
-- `layout.js`: splitters (mouse, toque, setas), painéis recolhíveis e abas
-  do painel inferior, com estado no localStorage.
+- `layout.js`: splitters (mouse, toque, setas), painéis recolhíveis, abas
+  do painel inferior e da coluna direita (Depurador | Ajuda), com estado no
+  localStorage.
 - `debugger.js`: coluna direita (registradores, watch, breakpoints, pilha,
   memória, trace). O disassembly em volta do pc saiu daqui: o painel
   inferior mostra o `ksdis` inteiro da imagem, com o pc destacado.
@@ -264,6 +271,36 @@ format len flags shape imm operands signature desc flagsText snippet` e
 `long`/`immForm`/`indexed` quando existem; listas `branches pseudos
 directives registers syscalls specialRegs conds`. `test_isa.js` confere a
 cobertura contra as fontes.
+
+**Fichas (ajuda e referência).** O texto rico vem de `tools/isa-doc.md`, um
+Markdown versionado com uma seção por mnemônico (e por condição,
+pseudo-instrução, forma abreviada, diretiva, grupo de registradores,
+registrador especial, flag, formato, fault, syscall, erro de syscall e faixa
+do mapa de opcodes), escrito a partir do **doc 04 da ksvm2, a fonte
+normativa** (o cabeçalho do arquivo diz isso: divergência se corrige
+primeiro no doc 04); onde o doc 04 não diz, o texto segue `exec.c`,
+`alu.c`, `syscall.c` e o `ksas`. Formato: `## chave`, linhas `campo:
+valor` (`grupo resumo sintaxe exemplo` nas instruções) e, depois de uma
+linha em branco, uma linha por item do detalhe. O `mkisa.js` valida (campo
+obrigatório, campo desconhecido, 2 a 5 linhas de detalhe, grupo conhecido)
+e **falha o build** se faltar ficha para algum opcode, condição, pseudo,
+diretiva, SR, fault ou syscall, ou se sobrar ficha sem correspondente.
+Ele mescla nas instruções `group summary detail syntax syntaxAll example
+flagsList encoding` (`encoding` derivado do formato e da forma dos
+operandos: `{opcode, format, len, fields: [{name, hi, lo, value, word?}],
+text}`, com o mapeamento operando → campo do topo do `isa.def`), nos
+desvios a ficha da condição, e acrescenta `groups shortForms regDocs
+syscallErrors flagBits formats faults opRanges` (faults e seus códigos
+lidos do enum de `fault.h`; erros de syscall do `syscall.h`). Pipeline:
+
+    isa.def ─► tools/isadump ─► isa-raw.json ─┐
+    tools/ksasm-extra.json ───────────────────┤
+    tools/isa-doc.md (fichas, doc 04) ────────┼─► tools/mkisa.js ─► isa.json + isa.js
+    syscall.h, fault.h ───────────────────────┘
+
+O `isa.json` passou de ~56 KB para ~240 KB (indentado) e o `isa.js` tem
+~180 KB; a página só consulta esses dados (ajuda ao cursor com debounce de
+120 ms, sem montar nada).
 
 ## 9. Distribuição
 

@@ -30,14 +30,19 @@ arquivo HTML.
 
 ## Usar
 
-Abra `dist/ksweb-single.html` com clique duplo (tudo num arquivo, ~1,1 MB:
+Abra `dist/ksweb-single.html` com clique duplo (tudo num arquivo, ~1,4 MB:
 os três wasm, o editor e os exemplos), ou sirva `dist/` como site estático
 (`make serve` e <http://localhost:8000/>; serve também no GitHub Pages).
 
 1. **Escreva** no editor (o projeto começa com um `main.ksasm`) ou abra um
    **Exemplo**. Os erros do `ksas` aparecem enquanto você digita e no
    painel **Problemas**; Ctrl+Espaço sugere instruções, registradores e
-   rótulos; passar o mouse mostra a documentação da instrução.
+   rótulos; passar o mouse (ou Ctrl+K Ctrl+I no cursor) mostra a ficha da
+   instrução, e a aba **Ajuda** da coluna direita acompanha o cursor com a
+   ficha completa (semântica, flags, codificação, exemplo).
+   **Referência da ISA** (Ctrl+Shift+H ou o botão ISA): todas as
+   instruções com busca e filtros, mapa de opcodes, condições, pseudos,
+   diretivas, registradores, flags, formatos, faults e syscalls.
 2. **Montar** (Ctrl+B) gera a imagem, o listing (**Saída da montagem**) e o
    desassembly. **Executar** (F5) remonta se preciso e roda no
    **Terminal**.
@@ -74,7 +79,7 @@ fica no WSL (`BUILD.md`):
 | Alvo | O que faz |
 |------|-----------|
 | `make` | `build/ksvm.wasm`, `build/ksas.wasm`, `build/ksdis.wasm`, `build/web/isa.json`, ferramentas nativas da ksvm2 em `build/native/` e exemplos `.ksx` |
-| `make test` | 300 casos em Node: wasm × `ksvm` nativo, `ksas`/`ksdis.wasm` × nativos, isa.json, mapa de linhas e linguagem do editor, projetos/IndexedDB/zip, terminal VT, editor de linha, formatadores, `dist/` e os dois workers |
+| `make test` | 339 casos em Node: wasm × `ksvm` nativo, `ksas`/`ksdis.wasm` × nativos, isa.json e fichas da ISA (exemplos montados), referência e ajuda ao cursor, mapa de linhas e linguagem do editor, projetos/IndexedDB/zip, terminal VT, editor de linha, formatadores, `dist/` e os dois workers |
 | `make dist` | `dist/` (site estático) e `dist/ksweb-single.html` |
 | `make serve` | `python3 -m http.server` em `dist/` (`PORT=8000`) |
 | `make test-browser` | a IDE num Chrome/Edge headless (opcional; Node 22+) |
@@ -93,6 +98,7 @@ web/            index.html, style.css
                 ksweb.js (controlador da IDE), editor.js (CodeMirror + ksasm),
                 layout.js (splitters/painéis), debugger.js (coluna do depurador),
                 terminal.js (VT no DOM)
+                isaref.js (fichas, referência da ISA; parte pura testada em Node)
                 sem DOM: ksasm-lang.js (tokenizer, autocomplete), asmtools.js
                 (montagem, listing, mapa de linhas), project.js (projetos,
                 IndexedDB, zip), wasi.js (shim WASI), vmcore.js, vt.js,
@@ -101,9 +107,9 @@ web/            index.html, style.css
 web/vendor/     codemirror.bundle.js (CodeMirror 6 empacotado), LICENSES.md
 examples/       vtdemo.ksasm, maiusculas.ksasm e menu.json (exemplos do menu)
 tools/          mkexamples.js (examples.js com imagens e fontes), mksingle.js
-                (arquivo único), isadump.c + mkisa.js + ksasm-extra.json
-                (isa.json), build_editor.sh + editor/ (bundle do CodeMirror)
-test/           run_node.js, test_wasm_tools.js, test_isa.js, test_asmtools.js,
+                (arquivo único), isadump.c + mkisa.js + ksasm-extra.json +
+                isa-doc.md (isa.json; isa-doc.md = fichas escritas do doc 04), build_editor.sh + editor/ (bundle do CodeMirror)
+test/           run_node.js, test_wasm_tools.js, test_isa.js, test_isaref.js, test_asmtools.js,
                 test_project.js, test_vt.js, test_format.js, test_lineedit.js,
                 test_terminal.js, check_dist.js, browser_smoke.js;
                 progs/*.ksasm (programas de regressão)
