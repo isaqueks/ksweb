@@ -29,7 +29,9 @@ copiar dados e ler strings.
 | 6 | `NOT_LOADED` | nenhuma imagem carregada |
 
 Motivos de `BREAK` (`ksweb_stop_reason`): 1 breakpoint, 2 instrução `BRK`
-(com `KSWEB_STOPF_BRK`), 3 instrução `SYSCALL` (com `KSWEB_STOPF_SYSCALL`).
+(com `KSWEB_STOPF_BRK`), 3 instrução `SYSCALL` (com `KSWEB_STOPF_SYSCALL`),
+4 `KSWEB_STOP_STEP`: a parada por profundidade (`ksweb_frame_stop`) foi
+atingida — passo por cima ou sair da função concluído.
 
 Erros (`int` com sinal): os `KSVM_E_*` de `ksvm2/include/ksvm/types.h`
 (`-5` IMAGE_MAGIC, `-6` IMAGE_VERSION, `-7` IMAGE_CHECKSUM, `-8`
@@ -100,6 +102,8 @@ IMAGE_RANGE, `-9` IMAGE_ENTRY, `-10` NO_RAM, ...) e `KSWEB_E_NOMEM = -100`
 | `ksweb_bp_clear(addr) → int` | 0 ou -1 se não existia. |
 | `ksweb_bp_clear_all()`, `ksweb_bp_count() → u32`, `ksweb_bp_get(i) → u32` | tabela de breakpoints. |
 | `ksweb_set_stop_flags(f)` | `1` parar antes de `BRK`, `2` parar antes de `SYSCALL`. |
+| `ksweb_frame_stop(depth: i32)` | parada por profundidade de chamadas: zera o contador, que soma 1 a cada `CALL`/`CALLR` e tira 1 a cada `RET` executados, e para (`BREAK`, motivo 4, antes da instrução seguinte) logo depois do `RET` que deixa o contador em `depth`. `0` a partir de um `CALL` = **passo por cima** (recursão incluída: só o `RET` correspondente conta); `-1` = **sair da função**. A instrução atual executa sem checar breakpoints (a VM já está nela); os outros breakpoints continuam valendo e param antes. Fica armada até ser atingida, desligada com `KSWEB_FRAME_OFF` (`INT32_MAX`) ou zerada por `ksweb_init`. Enquanto armada, `ksweb_run` usa o laço instrução a instrução. |
+| `ksweb_frame_depth() → i32` | o contador atual (para testes). |
 | `ksweb_trace_enable(n) → u32` | liga o trace guardando os últimos `n` registros (até 65536) ou desliga (`0`); limpa o histórico; devolve a capacidade. Ligado, instala o hook de trace do núcleo (custo por instrução só quando ligado). |
 | `ksweb_trace_clear()`, `ksweb_trace_total() → u32`, `ksweb_trace_count() → u32` | limpa; registros desde a limpeza; registros guardados. |
 | `ksweb_trace_line(i, buf, n) → u32` | registro `i` (0 = o mais antigo guardado) formatado exatamente como uma linha do `ksvm --trace` (`pc: bytes  instrução  flags\n`); um BRK sai como `brk at pc=...` seguido do dump de registradores, como no runner. Devolve o comprimento. |
@@ -127,7 +131,8 @@ readable}` (em pedaços de 2 KiB pelo buffer de texto, sem consumir a arena),
 `regions() → [{base, size, perm, permStr, kind, kindName, host}]` (por
 base), `header() → {...}` (nomes do §3 em camelCase, mais `flagNames`),
 `bpSet/bpClear/bpClearAll/bpList`, `setStopFlags(brk, syscall)`,
-`traceEnable(n)`, `traceClear()`, `traceCount()`, `traceTotal()`,
+`frameStop(depth)` / `frameOff()` / `frameDepth()` (passo por cima e sair
+da função, §3), `traceEnable(n)`, `traceClear()`, `traceCount()`, `traceTotal()`,
 `traceText(from?, max?)` (texto no formato do `--trace`), `traceTail(n) →
 [{pc, line}]`, `finishInfo(state, limit) → {code, kind, message}`,
 `takeOutput() → Uint8Array`.
@@ -147,7 +152,62 @@ conforme houver espaço), `eof()` (depois da fila), `tick(step?) → {action,
 espera real).
 
 Outros: `parseSymbols(image, symOff, symSize) → [{addr, kind, name}]`,
-`STATE`, `STATE_NAME`, `EXIT` (64/65/66/69/70/124/130), `REG_NAMES`.
+`STATE`, `STATE_NAME`, `STOP_NAME` (`'' breakpoint BRK syscall step`),
+`FRAME_OFF`, `EXIT` (64/65/66/69/70/124/130), `REG_NAMES`.
+
+## 4b. Módulos da IDE (sem DOM, scripts clássicos)
+
+Todos funcionam com `<script>`, `importScripts` e `require()` do Node.
+
+### `web/wasi.js`
+
+| Função | Descrição |
+|--------|-----------|
+| `runWasi(wasm, {args, files, env, stdin}) → {exitCode, stdout, stderr, stdoutBytes, stderrBytes, files}` | roda um comando WASI preview1 de forma síncrona. `wasm`: bytes ou `WebAssembly.Module`; `args`: argv completo; `files`: `Map`/objeto caminho → `Uint8Array`/string (relativos à raiz); `stdin`: bytes/string. `files` do resultado: `Map` com os arquivos finais (criados, alterados, sem os apagados). |
+| `compileWasi(bytes) → Module` | compila e guarda em cache (por `ArrayBuffer`). |
+| `WasiExit`, `WASI_ERRNO`, `normPath(base, p)` | auxiliares. |
+
+### `web/asmtools.js` (`AsmTools`)
+
+| Função | Descrição |
+|--------|-----------|
+| `assemble(ksas, {files, main, debug = true, defines}) → {ok, exitCode, stderr, diagnostics, image, listingText, listing, info, ms}` | `ksas MAIN -o .ksweb.ksx -l .ksweb.lst [-g] [-D...]` |
+| `disassemble(ksdis, image, raw?) → {ok, text, stderr, exitCode}` | `ksdis prog.ksx [--raw]` |
+| `parseDiagnostics(stderr) → [{file, line, col, message, text, severity}]` | `arquivo:linha:coluna: erro:`, sem coluna, sem linha; o resumo `ksas: N erro(s)` vem com `severity: 'info'` |
+| `parseListing(text) → {rows, sections, header, symbols, files}` | `rows`: `{file, line, addr, bytes, size, src, kind: insn·data·label·equ·none, value}` |
+| `buildDebugInfo(listing) → {lines, code, addrLine, symbols, symByName, header, files}` | `code`: `Map` arquivo → linhas com instrução (ordenadas); `addrLine`: `Map` endereço → `{file, line}`; `lines`: `Map` `"arquivo\nlinha"` → `{addr, size, kind}` |
+| `resolveBreakpoint(info, file, line) → {line, addr, moved} \| null` | a linha ou a próxima com instrução no mesmo arquivo |
+| `parseKsdis(text) → [{text, addr, label, section, code}]` | linhas da listagem do `ksdis` |
+| `byteColToChar(lineText, col)` | coluna do ksas (bytes UTF-8, 1-based) → índice de caractere |
+
+### `web/ksasm-lang.js` (`KsasmLang`)
+
+`setIsa(isa)`, `streamParser` (`{name, startState, copyState, token,
+languageData}` — o formato do `StreamLanguage` do CodeMirror 6; tipos de
+token: `mnemonic pseudo directive register labelDef label number string
+char comment operator punct invalid syscall`), `tokenizeLine(text) →
+[{from, to, type, text}]`, `scanLabels(text) → [{name, line, kind}]`,
+`labelCompletions(text, prefix, line?)`, `statementKind(text) → insn ·
+directive · equ · label · empty`, `completionContext(lineText, col)`,
+`completionOptions(ctx, labels) → [{label, type, detail, info, snippet?,
+boost?}]`, `wordAt(lineText, col)`, `tokenAt(lineText, col)`,
+`describe(word, tokenType) → {kind, title, signature, desc, detail}`.
+
+### `web/project.js` (`KsProject`)
+
+`Project` (`create(name, files, main)`, `fileNames`, `text`, `setText`,
+`addFile`, `renameFile`, `deleteFile`, `duplicateFile`, `setMain`,
+`openFile`, `closeFile`, `setBreakpoints`, `uniqueName`, `toJSON`/`fromJSON`),
+`checkName(nome) → mensagem | null`, `ProjectStore({indexedDB,
+localStorage, dbName})` (`open() → 'indexeddb' | 'localstorage' |
+'memory'`, `list`, `load`, `save`, `remove`, `getMeta`, `setMeta`),
+`makeZip([{name, data}]) → Uint8Array`, `readZip(bytes) → Promise<[{name,
+data}]>`, `inflateRaw(bytes)`, `crc32(bytes)`, `projectToZip(p)`,
+`projectFromZip(bytes, nome)`.
+
+### Worker do assembler (`web/asm-worker.js`)
+
+Protocolo em 01-arquitetura.md §7.
 
 ## 5. Exemplo mínimo (Node)
 

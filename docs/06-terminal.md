@@ -124,7 +124,19 @@ linha completa e deixa o resto para editar.
 Atalhos da página (não vão ao guest, em nenhum dos modos; `pageShortcut`
 em `input.js`): Ctrl+Alt+C ou Pause interrompe a VM;
 Ctrl+C com texto selecionado copia; Ctrl+V/Cmd+V cola; Shift+PgUp/PgDn rola
-o histórico; F8 executar/parar; F10 passo; Ctrl+F9 depurador.
+o histórico; F8 executar/parar; F10 passo (por cima de call); Ctrl+F9
+depurador.
+
+Na IDE os outros atalhos (F5, F9, F11, Shift+F11, Ctrl+Shift+F5, Ctrl+B,
+Ctrl+S, F1 — `ideShortcut` em `input.js`, 07-ide.md) valem fora do
+terminal e também nele no **modo linha**, quando o editor de linha não usa a
+tecla. No **modo raw** o teclado pertence ao programa: o que o terminal
+envia ao guest (F5 = `ESC[15~`, F9, F11, Ctrl+B = 0x02, Ctrl+S = 0x13...) não
+vira atalho.
+
+O terminal fica no painel inferior da IDE; com "terminal ajustado ao
+painel" (padrão) colunas e linhas acompanham o tamanho do painel (splitter
+ou janela).
 
 As respostas de DSR/DA vão direto ao stdin do guest, nos dois modos.
 
