@@ -37,8 +37,14 @@
    * que o shim WASI abriu. Fora da raiz ou vazio: como veio. */
   function normFile(name) {
     if (!name) return name;
-    const p = Wasi.normPath('', name);
-    return p ? p : name;
+    /* a regra do normPath do wasi.js (que a página não carrega) */
+    const parts = [];
+    for (const s of name.split('/')) {
+      if (s === '' || s === '.') continue;
+      if (s === '..') { if (!parts.length) return name; parts.pop(); continue; }
+      parts.push(s);
+    }
+    return parts.length ? parts.join('/') : name;
   }
 
   /* ---- diagnósticos ---- */
@@ -178,6 +184,25 @@
     return { line: l, addr: info.lines.get(file + '\n' + l).addr, moved: l !== line };
   }
 
+  /* Arquivos alcançados a partir de main pelos .include (estático, como o
+   * ksas resolve: relativo ao arquivo que inclui). Serve para saber se um
+   * arquivo faz parte da montagem quando ela falhou e não há listing. */
+  function includeClosure(files, main) {
+    const fm = toFileMap(files), seen = new Set(), stack = [normFile(main)];
+    while (stack.length) {
+      const f = stack.pop();
+      if (seen.has(f) || !fm.has(f)) continue;
+      seen.add(f);
+      const v = fm.get(f), text = typeof v === 'string' ? v : dec.decode(v);
+      const dir = f.includes('/') ? f.slice(0, f.lastIndexOf('/') + 1) : '';
+      for (const m of text.matchAll(/^[^;#"\n]*?\.include\s+"([^"\n]*)"/gim)) {
+        const p = m[1];
+        stack.push(normFile(p.startsWith('/') ? p : dir + p));
+      }
+    }
+    return seen;
+  }
+
   /* ---- execução das ferramentas ---- */
 
   function toFileMap(files) {
@@ -236,7 +261,7 @@
 
   const api = {
     assemble, disassemble, parseDiagnostics, parseListing, buildDebugInfo, resolveBreakpoint,
-    parseKsdis, byteColToChar, normFile, OUT_KSX, OUT_LST
+    parseKsdis, byteColToChar, normFile, includeClosure, OUT_KSX, OUT_LST
   };
   if (isNode) module.exports = api;
   else root.AsmTools = api;

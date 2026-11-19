@@ -89,6 +89,27 @@ test('.include com ./, .. e / : nomes do projeto nos erros e no mapa', () => {
   eq(T.parseDiagnostics('../fora.ksasm:1:1: erro: x\n')[0].file, '../fora.ksasm', 'fora da raiz fica como veio');
 });
 
+/* Alcance pelos .include sem montar (a IDE usa quando a montagem falhou):
+ * igual aos arquivos do listing quando a montagem dá certo. */
+test('includeClosure = arquivos do listing do ksas', () => {
+  const files = new Map([
+    ['m.ksasm', '_start:\n  call f\n  halt\n  .include "lib/a.ksasm"\n; .include "comentado.ksasm"\nx:  .INCLUDE "./lib/../c.ksasm"\n'],
+    ['lib/a.ksasm', '  .include "b.ksasm"\nf: ret\n'], ['lib/b.ksasm', 'B = 1\n  .include "/d.ksasm"\n'],
+    ['c.ksasm', 'g: ret\n'], ['d.ksasm', 'D = 2\n'], ['comentado.ksasm', 'lixo\n'], ['solto.ksasm', 'lixo\n']]);
+  const r = T.assemble(KSAS, { files, main: 'm.ksasm' });
+  ok(r.ok, r.stderr);
+  eq([...T.includeClosure(files, 'm.ksasm')].sort(), [...r.info.files].sort(), 'mesmo conjunto');
+  eq([...T.includeClosure(files, 'm.ksasm')].sort(), ['c.ksasm', 'd.ksasm', 'lib/a.ksasm', 'lib/b.ksasm', 'm.ksasm']);
+  const cyc = new Map([['a.s', '.include "b.s"\n'], ['b.s', '.include "a.s"\n']]);
+  eq([...T.includeClosure(cyc, 'a.s')].sort(), ['a.s', 'b.s'], 'ciclo termina');
+  /* normFile (página, sem wasi.js) segue a mesma regra do normPath do shim */
+  const W = require('../web/wasi.js');
+  for (const p of ['a.s', './a.s', 'lib/../a.s', '/lib/a.s', 'lib//./a.s', '../a.s', 'lib/../../a.s', '.', '']) {
+    const w = W.normPath('', p);
+    eq(T.normFile(p), w ? w : p, 'normFile(' + JSON.stringify(p) + ')');
+  }
+});
+
 /* ---- listing e mapa linha <-> endereço ---- */
 
 /* Parser independente do listing nativo: linhas de instrução = 4 ou 8 bytes

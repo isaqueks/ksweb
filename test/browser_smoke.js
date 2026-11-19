@@ -384,6 +384,19 @@ async function openPage(url) {
       await light.until(termText + '.includes("pronto!")', 10000);
       await light.shot('light-vtdemo');
     });
+    log('lint de arquivo incluído');
+    await check('erro no principal não vira erros falsos no incluído aberto', async () => {
+      const c = await openPage(single);
+      await c.until('window.ksweb && ksweb.state.project && ksweb.state.asm.ready', 10000, 'IDE');
+      await c.eval(`(() => { const p = ksweb.state.project;
+        p.addFile('t/principal.ksasm', 'LIMITE = 3\\n_start:\\n  call usa\\n  bogus r1\\n  halt\\n  .include "./usa.ksasm"\\n');
+        p.addFile('t/usa.ksasm', 'usa:\\n  li r1, LIMITE\\n  ret\\n');
+        ksweb.setMain('t/principal.ksasm'); ksweb.openTab('t/usa.ksasm'); return true; })()`);
+      await c.until('ksweb.state.lint && ksweb.state.lint.version === ksweb.state.version && (ksweb.state.diags.get("t/principal.ksasm") || []).length === 1', 5000, 'erro no principal');
+      await sleep(300);
+      const d = await c.eval('JSON.stringify(ksweb.state.diags.get("t/usa.ksasm") || [])');
+      if (d !== '[]') throw new Error('erros no incluído: ' + d);
+    });
     log('armazenamento bloqueado e layout salvo corrompido');
     await check('localStorage e IndexedDB bloqueados (SecurityError): a IDE abre só em memória', async () => {
       const c = await openPage(single);

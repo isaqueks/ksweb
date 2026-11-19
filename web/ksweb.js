@@ -392,7 +392,11 @@
     /* arquivo ativo fora da montagem do principal (ex.: biblioteca sem
      * .include no principal): monta-o sozinho para o lint */
     const act = editor.active;
-    const covered = (r.info && r.info.files.includes(act)) || r.diagnostics.some((d) => d.file === act);
+    /* sem listing (a montagem falhou), o alcance vem dos .include: um
+     * incluído não é montado sozinho por causa de um erro no principal (os
+     * símbolos do principal apareceriam como indefinidos nele) */
+    const covered = (r.info ? r.info.files.includes(act) : AsmTools.includeClosure(new Map(projectFiles()), proj.main).has(act)) ||
+      r.diagnostics.some((d) => d.file === act);
     if (act && act !== proj.main && !covered && /\.(ksasm|asm|s|inc)$/i.test(act)) {
       const r2 = await assemble(act);
       if (v !== S.version || proj !== S.project) return;
