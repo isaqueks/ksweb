@@ -384,6 +384,10 @@ async function scenario(cdp, label) {
     await cdp.eval('document.querySelector(".ref-card-row [data-act=insert]").click()');
     await cdp.until('ksweb.state.project.text("t/ajuda.ksasm").includes("        fcmp r1, r2             ; depois bmi")', 3000, 'exemplo inserido');
     await cdp.until('ksweb.editor.view.hasFocus', 2000, 'foco volta ao editor');
+    /* recuo com tab: o exemplo herda o recuo da linha do cursor */
+    await cdp.eval('(() => { const v = ksweb.editor.view, n = v.state.doc.length; v.dispatch({ changes: { from: n, insert: "\\tnop" }, selection: { anchor: n + 2 } }); return true; })()');
+    await cdp.eval('document.querySelector(".ref-card-row [data-act=insert]").click()');
+    await cdp.until('ksweb.state.project.text("t/ajuda.ksasm").includes("\\tnop\\n\\tfcmp r1, r2")', 3000, 'exemplo com o recuo da linha (tab)');
     await cdp.eval(`(() => { const n = 't/ajuda.ksasm'; ksweb.state.project.deleteFile(n); ksweb.editor.forget(n);
       ksweb.layout.showRight('debugger'); ksweb.layout.showPanel('terminal'); ksweb.openTab(ksweb.state.project.main); return true; })()`);
   });

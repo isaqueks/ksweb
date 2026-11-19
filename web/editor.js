@@ -479,6 +479,7 @@
       if (!w) return null;
       const tok = KsasmLang.tokenAt(line.text, Math.min(w.from + 1, w.to));
       if (tok && (tok.type === 'comment' || tok.type === 'string' || tok.type === 'char')) return null;
+      if (tok && tok.type === 'number' && tok.text !== w.word) return null;   /* "1" de "1.5" (fli/.float) */
       return { word: w.word, type: tok ? tok.type : null, file: this.active, line: line.number, pos: line.from + w.from, end: line.from + w.to };
     }
 
@@ -520,12 +521,14 @@
     }
 
     /* Insere uma linha (exemplo da referência) abaixo da linha do cursor, ou
-     * nela se estiver vazia, recuada como instrução; o cursor vai para o fim. */
+     * nela se estiver vazia, recuada como instrução com o recuo da linha do
+     * cursor (8 espaços se ela não tem recuo); o cursor vai para o fim. */
     insertLine(text) {
       if (this.active === null) return false;
       const st = this.view.state, line = st.doc.lineAt(st.selection.main.head);
       const t = String(text).replace(/\s+$/, '');
-      const body = /^\s/.test(t) || /^[A-Za-z_][\w.]*:/.test(t) ? t : '        ' + t;
+      const indent = /^[ \t]*/.exec(line.text)[0] || '        ';
+      const body = /^\s/.test(t) || /^[A-Za-z_][\w.]*:/.test(t) ? t : indent + t;
       const blank = !line.text.trim();
       const from = blank ? line.from : line.to;
       const insert = blank ? body : '\n' + body;

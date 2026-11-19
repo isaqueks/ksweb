@@ -215,6 +215,18 @@ test('token sob o cursor -> ficha: mnemônico, pseudo, diretiva, registrador, co
   eq(at('        nop     ; add aqui', 18, { line: true }), 'insn:nop=NOP', 'comentário: instrução da linha');
   eq(at('        bogus   r1', 9), null, 'mnemônico desconhecido');
   eq(at('', 0, { line: true }), null, 'linha vazia');
+  eq(at('        ldw     r1, [sp + 8]', 21), 'register:sp=sp', 'sp dentro dos colchetes');
+  eq(at('        ldw     r1, [sp + 8]', 9), 'insn:ldw=LDW', 'mnemônico do load');
+  eq(at('        ldw     r1, [sp + 8]', 26), 'number:8', 'deslocamento');
+  eq(at('        b.eq    fim', 11), 'branch:b.eq=b.eq', 'b.eq no ponto');
+  eq(at('add:    nop', 1), 'label:add', 'rótulo com nome de mnemônico (definição)');
+  eq(at('        jmp     add', 17), 'label:add', 'rótulo com nome de mnemônico (operando)');
+  eq(at('        la      r1, PUTC', 21), 'label:PUTC', 'nome de syscall fora de syscall é rótulo');
+  eq(at('        fli     r1, 1.5', 20), null, '"1" de 1.5 não é o inteiro 1');
+  eq(at('        fli     r1, 1.5', 22, { line: true }), 'pseudo:fli=fli', 'literal float: a pseudo da linha');
+  eq(at('        .float  inf, 0x1.8p1', 17), null, 'inf não é rótulo');
+  eq(at('        .float  inf, 0x1.8p1', 22, { line: true }), 'directive:.float=.float', 'hex-float: a diretiva da linha');
+  eq(at('        bcond   fim', 9), 'insn:bcond=BCOND (b<cond>)', 'bcond (recusado pelo ksas) mostra a ficha do b<cond>');
 });
 
 /* ---- DOM ---- */

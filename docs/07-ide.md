@@ -93,7 +93,8 @@ para mostrá-las, então a digitação não espera por elas.
   testadas e o significado depois de CMP e de FCMP), syscall, registrador
   especial — com sintaxe, resumo, detalhe (semântica exata, flags, casos
   especiais), flags, codificação com o **desenho dos campos de bits**,
-  exemplo (**Inserir no editor** e **Copiar**) e **Ver na referência**.
+  exemplo (**Inserir no editor**, numa linha nova com o recuo da linha do
+  cursor, e **Copiar**) e **Ver na referência**.
   Sobre um rótulo, endereço/seção/valor e "Ir para a definição". Com o
   cursor num espaço, vírgula, comentário ou string, vale o mnemônico da
   linha; numa linha sem nada, fica a última ficha. Depurar (parar na

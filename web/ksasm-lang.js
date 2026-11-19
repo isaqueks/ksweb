@@ -425,6 +425,10 @@
   function target(word, tokenType) {
     if (!word) return null;
     if (NUMBER.test(word)) return { kind: 'number', key: word };
+    /* literal float de fli/.float (1.5, inf, nan): não é inteiro nem rótulo */
+    if (tokenType === 'number') return null;
+    /* "bcond" é recusado pelo ksas, mas a ficha explica o b<cond> */
+    if (tokenType === 'invalid' && word.toLowerCase() === 'bcond' && V.insn.has('bcond')) return { kind: 'insn', key: 'bcond' };
     if (tokenType === 'invalid' || tokenType === 'comment' || tokenType === 'string' || tokenType === 'char') return null;
     const l = word.toLowerCase();
     if (tokenType !== 'label' && tokenType !== 'labelDef') {
@@ -460,8 +464,9 @@
    */
   function helpAt(lineText, col, opts) {
     const w = wordAt(lineText, col);
-    if (w) {
-      const tok = tokenAt(lineText, Math.min(w.from + 1, w.to));
+    const tok = w ? tokenAt(lineText, Math.min(w.from + 1, w.to)) : null;
+    /* "1" de "1.5" (ou "0x1" de "0x1.8p1") não é o número sob o cursor */
+    if (w && !(tok && tok.type === 'number' && tok.text !== w.word)) {
       const t = target(w.word, tok ? tok.type : null);
       if (t) return Object.assign(t, { word: w.word, from: w.from, to: w.to, type: tok ? tok.type : null });
     }
