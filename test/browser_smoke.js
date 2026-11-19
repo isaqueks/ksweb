@@ -275,6 +275,37 @@ async function scenario(cdp, label) {
     if (lines !== (lbl + 1) + ',' + callLine) throw new Error('gutter: ' + lines);
     await cdp.until('document.querySelector("#dbg-bps").innerText.includes("movido")', 2000, 'lista mostra o movimento');
   });
+  await check('IDE: 3 linhas acima dos breakpoints com a imagem antiga; Ctrl+B não troca o mapa; Continuar para na mesma instrução', async () => {
+    const before = await cdp.eval('JSON.stringify(ksweb.breakpoints().map((b) => [b.line, b.addr]).sort((x, y) => x[0] - y[0]))');
+    const bps = JSON.parse(before);
+    if (bps.length !== 2 || bps.some((b) => b[1] === null)) throw new Error('breakpoints antes: ' + before);
+    await cdp.eval('(() => { ksweb.editor.view.dispatch({ changes: { from: 0, insert: "; um\\n        nop\\n; três\\n" } }); return true; })()');
+    await cdp.until('!document.querySelector("#stale").hidden', 2000, 'faixa de desatualizado');
+    const want = JSON.stringify(bps.map(([l, a]) => [l + 3, a]));
+    await cdp.until('JSON.stringify(ksweb.breakpoints().map((b) => [b.line, b.addr]).sort((x, y) => x[0] - y[0])) === ' + JSON.stringify(want), 3000,
+      'mesmos endereços nas linhas +3: ' + want);
+    /* uma linha nova com breakpoint fica pendente (não vai para a VM; com a
+     * montagem desatualizada ele também não é movido) */
+    await cdp.eval('(() => { const v = ksweb.editor.view; v.dispatch({ effects: ksweb.editor._fx.bpToggle.of({ pos: v.state.doc.line(2).from }) }); return true; })()');
+    await cdp.until('ksweb.breakpoints().some((b) => b.line === 2 && b.pending && b.addr === null)', 2000, 'breakpoint pendente');
+    await cdp.until('document.querySelector(".cm-ks-mark.bp.pending")', 2000, 'marca de pendente no gutter');
+    await cdp.eval('(() => { const v = ksweb.editor.view; v.dispatch({ effects: ksweb.editor._fx.bpToggle.of({ pos: v.state.doc.line(2).from }) }); return true; })()');
+    /* Ctrl+B monta o fonte novo (o nop desloca o código em 4 bytes), mas a
+     * VM continua com a imagem antiga e com o mapa dela */
+    await cdp.key('b', { modifiers: 2 });
+    await cdp.until('ksweb.state.built && ksweb.state.built.version === ksweb.state.version', 4000, 'montou');
+    await cdp.until('ksweb.state.built.result.info.symByName.get("_start").addr === 4', 2000, 'nova montagem deslocada');
+    const after = await cdp.eval('JSON.stringify(ksweb.breakpoints().map((b) => [b.line, b.addr]).sort((x, y) => x[0] - y[0]))');
+    if (after !== want) throw new Error('Ctrl+B trocou o mapa ativo: ' + after + ' != ' + want);
+    const pc0 = await cdp.eval('ksweb.state.pc');
+    await cdp.eval('ksweb.editor.focus()');
+    await cdp.key('F5');
+    await cdp.until(vmState + ' === "break" && ksweb.state.pc !== ' + pc0, 5000, 'parou');
+    const pc = await cdp.eval('ksweb.state.pc');
+    const hit = bps.find((b) => b[1] === pc);
+    if (!hit) throw new Error('parou em 0x' + pc.toString(16) + ', fora dos breakpoints ' + before);
+    await cdp.until(debugLine + ' === ' + (hit[0] + 3), 3000, 'linha atual = linha do breakpoint (+3)');
+  });
   await check('IDE: remover breakpoints e terminar; projeto recuperado ao recarregar', async () => {
     await cdp.eval('document.querySelector("#dbg-bps").parentElement.querySelector("button:nth-of-type(2)").click()');
     await cdp.until('ksweb.breakpoints().length === 0', 2000, 'Limpar');

@@ -345,22 +345,60 @@
 
   /* ---- linha atual da depuração ---- */
 
-  function currentInfo() {
-    return S.imageSource === 'build' && S.built ? S.built.result.info : null;
+  /*
+   * Mapas linha <-> endereço. Cada montagem (S.built) guarda os textos que
+   * montou e, por arquivo, a ChangeSet do CodeMirror composta com todas as
+   * edições desde então (onDocChanges). S.run é a montagem da imagem que
+   * está na VM: um Ctrl+B durante a depuração cria outro S.built, mas
+   * breakpoints e linha atual continuam no mapa de S.run até a nova imagem
+   * ser carregada (Executar/Reiniciar). Linha atual -> linha da montagem ->
+   * endereço, e o caminho inverso, por AsmTools.curLineToBuild /
+   * buildLineToCur; linha nova (ou arquivo sem mapa) = breakpoint pendente.
+   */
+  function newBuildMap(result, version) {
+    return { result, version, texts: new Map(projectFiles()), changes: new Map() };
+  }
+
+  /* o mapa que vale para a VM: o da imagem carregada, ou o da última
+   * montagem quando não há imagem montada na VM */
+  function mapRun() { return S.imageSource === 'build' && S.run ? S.run : S.built; }
+
+  function onDocChanges(name, cs) {
+    for (const run of new Set([S.built, S.run])) {
+      if (!run || !run.texts.has(name)) continue;
+      const prev = run.changes.get(name);
+      if (prev === null) continue;                              /* já sem mapa */
+      if (cs === null) run.changes.set(name, null);
+      else if (prev === undefined) run.changes.set(name, cs.length === run.texts.get(name).length ? cs : null);
+      else run.changes.set(name, prev.newLength === cs.length ? prev.compose(cs) : null);
+    }
+    if (S.run && S.loaded) scheduleBpSync();
+  }
+
+  function toBuildLine(run, file, line) {
+    if (!run || !run.texts.has(file) || !S.project.has(file)) return null;
+    return AsmTools.curLineToBuild(run.changes.get(file), S.project.text(file), run.texts.get(file), line);
+  }
+
+  function toCurLine(run, file, line) {
+    if (!run || !run.texts.has(file) || !S.project.has(file)) return null;
+    return AsmTools.buildLineToCur(run.changes.get(file), run.texts.get(file), S.project.text(file), line);
   }
 
   function showPc(pc, fault, quiet) {
     S.pc = pc;
     updateStatusBar();
     renderDisasmPc(pc);
-    const info = currentInfo();
-    const loc = info && info.addrLine.get(pc >>> 0);
-    if (loc && S.project.has(loc.file) && !S.ksxMode) {
+    const run = S.imageSource === 'build' ? S.run : null;
+    const loc = run && run.result.info.addrLine.get(pc >>> 0);
+    const line = loc && !S.ksxMode ? toCurLine(run, loc.file, loc.line) : null;
+    if (line !== null) {
       openTab(loc.file);
-      editor.setDebugLine(loc.file, loc.line);
-      if (!quiet) status((fault ? 'fault em ' : 'parado em ') + loc.file + ':' + loc.line + ' (' + hex8(pc) + ')');
+      editor.setDebugLine(loc.file, line);
+      if (!quiet) status((fault ? 'fault em ' : 'parado em ') + loc.file + ':' + line + ' (' + hex8(pc) + ')');
     } else {
       editor.setDebugLine(null, null);
+      if (loc && !quiet) status((fault ? 'fault em ' : 'parado em ') + hex8(pc) + ': a linha ' + loc.line + ' de ' + loc.file + ' mudou desde a montagem (veja o Desassembly)');
       if (S.loaded && !S.ksxMode && !quiet) layout.showPanel('disasm');
     }
   }
@@ -477,7 +515,7 @@
       return null;
     }
     applyCodeLines(r.info);
-    S.built = { result: r, version: v };
+    S.built = newBuildMap(r, v);
     $('#asm-output').textContent = r.listingText || '(listing vazio)';
     resolveBreakpoints(true);
     disassembleImage(r.image);
@@ -531,19 +569,44 @@
 
   /* ---- breakpoints ---- */
 
-  /* [{file, line, addr, moved}] dos breakpoints de fonte, resolvidos pelo
-   * mapa linha <-> endereço da última montagem carregável. */
+  /* [{file, line, addr, moved, pending}] dos breakpoints de fonte (linhas
+   * atuais), resolvidos pelo mapa da imagem carregada (mapRun). pending:
+   * a linha é nova desde aquela montagem; não vai para a VM até remontar. */
   function breakpointList() {
     if (!S.project) return [];
     const out = [];
-    const info = S.built ? S.built.result.info : null;
+    const run = mapRun();
+    const pend = new Map();
     for (const [file, lines] of S.project.breakpoints) {
       for (const line of lines) {
-        const r = info ? AsmTools.resolveBreakpoint(info, file, line) : null;
-        out.push({ file, line, addr: r ? r.addr : null, moved: S.bpMoved && S.bpMoved.get(file + ':' + line) });
+        let r = null, pending = false;
+        if (run && run.texts.has(file)) {
+          const bl = toBuildLine(run, file, line);
+          if (bl === null) pending = true;
+          else r = AsmTools.resolveBreakpoint(run.result.info, file, bl);
+        }
+        if (pending) { if (!pend.has(file)) pend.set(file, []); pend.get(file).push(line); }
+        out.push({ file, line, addr: r ? r.addr : null, moved: S.bpMoved && S.bpMoved.get(file + ':' + line), pending });
       }
     }
+    showPending(pend);
     return out;
+  }
+
+  /* marcas vazadas no gutter (fora da atualização em curso do editor) */
+  function showPending(pend) {
+    const key = JSON.stringify([...pend]);
+    if (key === S.pendKey) return;
+    S.pendKey = key;
+    queueMicrotask(() => {
+      for (const n of S.project.fileNames()) editor.setPendingLines(n, pend.get(n) || []);
+    });
+  }
+
+  let bpSyncTimer = null;
+  function scheduleBpSync() {
+    clearTimeout(bpSyncTimer);
+    bpSyncTimer = setTimeout(() => dbg.sync(), 150);
   }
 
   /* Linhas sem código: o breakpoint vai para a próxima linha com código. */
@@ -582,11 +645,13 @@
   }
 
   function addAddrBreakpoint(addr) {
-    /* o desassembly do painel é o da última montagem (mesmo sem imagem carregada) */
-    const info = S.ksxMode || S.imageSource === 'ksx' && S.loaded ? null : (S.built ? S.built.result.info : null);
-    const loc = info && info.addrLine.get(addr >>> 0);
-    if (loc && S.project.has(loc.file)) {
-      const lines = (S.project.breakpoints.get(loc.file) || []).concat([loc.line]);
+    /* o desassembly do painel é o da última montagem (mesmo sem imagem
+     * carregada); a linha dela vai para a linha atual do fonte */
+    const run = S.ksxMode || S.imageSource === 'ksx' && S.loaded ? null : S.built;
+    const loc = run && run.result.info.addrLine.get(addr >>> 0);
+    const line = loc ? toCurLine(run, loc.file, loc.line) : null;
+    if (line !== null) {
+      const lines = (S.project.breakpoints.get(loc.file) || []).concat([line]);
       S.project.setBreakpoints(loc.file, lines);
       editor.setBreakpoints(loc.file, S.project.breakpoints.get(loc.file));
       scheduleSave();
@@ -636,6 +701,7 @@
     if (!r) return;
     S.imageSource = 'build';
     S.imageVersion = S.built.version;
+    S.run = S.built;
     if ($('#opt-clear').checked) term.clear();
     if (stopAtEntry) layout.collapse('right', false);
     else layout.showPanel('terminal');
@@ -686,6 +752,7 @@
   function openKsx(bytes, name) {
     S.ksxMode = true;
     S.imageSource = 'ksx';
+    S.run = null;
     S.image = bytes;
     S.imageName = name;
     S.debugSession = false;
@@ -756,6 +823,8 @@
     S.version++;
     S.lint = null;
     S.built = null;
+    S.run = null;
+    S.pendKey = null;
     S.diags = new Map();
     S.codeLines = new Map();
     S.bpMoved = new Map();
@@ -789,6 +858,8 @@
       editor.setBreakpoints(name, S.project.breakpoints.get(name) || []);
       if (S.diags.get(name)) editor.setDiagnostics(name, S.diags.get(name));
       if (S.codeLines.get(name)) editor.setCodeLines(name, S.codeLines.get(name));
+      S.pendKey = null;                  /* reaplica as marcas de pendente */
+      if (dbg) dbg.renderBreakpoints();
     }
     $('#file-name').textContent = name;
     $('#sb-file').textContent = name;
@@ -879,6 +950,7 @@
         try {
           S.project.renameFile(name, to);
           editor.rename(name, to);
+          for (const run of [S.built, S.run]) if (run && run.texts.has(name)) { run.texts.set(to, run.texts.get(name)); run.changes.set(to, null); }
           for (const k of [S.diags, S.codeLines]) if (k.has(name)) { k.set(to, k.get(name)); k.delete(name); }
           S.version++;
           scheduleSave();
@@ -990,6 +1062,7 @@
       if (r) {
         S.imageSource = 'build';
         S.imageVersion = S.built.version;
+        S.run = S.built;
         layout.showPanel('terminal');
         loadImage(r.image, ex.name + '.ksx', true);
       }
@@ -1275,6 +1348,7 @@
       onChange: onEdit,
       onCursor: (l, c) => { $('#sb-pos').textContent = 'Ln ' + l + ', Col ' + c; },
       onBreakpoints: onEditorBreakpoints,
+      onDocChanges,
       labels: labelsFor,
       hover,
       keys: { 'Mod-b': () => doShortcut('build'), 'Mod-s': () => doShortcut('save') }

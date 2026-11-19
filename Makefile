@@ -213,6 +213,7 @@ test: all dist $(WASI_PROBE) $(NATIVE_PROBE)
 	$(NODE) test/test_asmtools.js --build $(BUILD) --native $(NATIVE) --ksvm2 $(K)
 	$(NODE) test/test_project.js
 	$(NODE) test/test_worker.js --build $(BUILD)
+	$(NODE) test/test_srcmap.js --build $(BUILD)
 	$(NODE) test/check_dist.js $(DIST)
 
 # Opcional: Chrome/Edge real via DevTools Protocol (Node >= 22; pula se faltar).

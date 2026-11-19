@@ -12,6 +12,8 @@
  *
  *   const ed = new KsEditor(parent, {
  *     onChange(name, text), onCursor(line, col), onBreakpoints(name, lines),
+ *     onDocChanges(name, changeSet|null)  toda mudança do texto de um arquivo
+ *         (inclusive as programáticas); null = substituído sem ChangeSet,
  *     labels(name, text, line) -> [{name, line, kind, addr?, file?}],
  *     hover({word, type, file, line}) -> Promise<HTMLElement|null>,
  *     keys: {Ctrl-b: fn, F9: fn, ...}   (atalhos extras, Mod = Ctrl/Cmd)
@@ -20,6 +22,7 @@
  *   ed.setDiagnostics(name, [{line, col, message, severity}])
  *   ed.setCodeLines(name, [{line, addr}]) / setDebugLine(name, line|null)
  *   ed.setBreakpoints(name, lines) / getBreakpoints(name) / toggleBreakpoint()
+ *   ed.setPendingLines(name, lines)  breakpoints pendentes (marca vazada)
  *   ed.gotoLine(name, line, col) / focus() / cursor()
  */
 (function (root) {
@@ -131,14 +134,32 @@
         }
       });
 
+      /* breakpoints pendentes: linha nova desde a montagem da imagem na VM */
+      const pendSet = C.StateEffect.define();
+      const pendMark = new BpMarker();
+      const pendField = C.StateField.define({
+        create: () => C.RangeSet.empty,
+        update(set, tr) {
+          set = set.map(tr.changes);
+          for (const e of tr.effects) {
+            if (!e.is(pendSet)) continue;
+            const doc = tr.state.doc;
+            set = C.RangeSet.of([...new Set(e.value.filter((l) => l >= 1 && l <= doc.lines))].sort((a, b) => a - b).map((l) => pendMark.range(doc.line(l).from)));
+          }
+          return set;
+        }
+      });
+
       class LineMarker extends C.GutterMarker {
-        constructor(bp, dbg, addr) { super(); this.bp = bp; this.dbg = dbg; this.addr = addr; }
-        eq(o) { return o.bp === this.bp && o.dbg === this.dbg && o.addr === this.addr; }
+        constructor(bp, dbg, addr, pend) { super(); this.bp = bp; this.dbg = dbg; this.addr = addr; this.pend = !!pend; }
+        eq(o) { return o.bp === this.bp && o.dbg === this.dbg && o.addr === this.addr && o.pend === this.pend; }
         toDOM() {
-          const s = el('span', 'cm-ks-mark' + (this.bp ? ' bp' : '') + (this.dbg ? ' dbg' : '') + (this.addr !== null ? ' code' : ''));
-          s.textContent = this.dbg ? '➤' : this.bp ? '●' : this.addr !== null ? '·' : '';
+          const pend = this.bp && this.pend;
+          const s = el('span', 'cm-ks-mark' + (this.bp ? ' bp' : '') + (pend ? ' pending' : '') + (this.dbg ? ' dbg' : '') + (this.addr !== null ? ' code' : ''));
+          s.textContent = this.dbg ? '➤' : pend ? '○' : this.bp ? '●' : this.addr !== null ? '·' : '';
           const where = this.addr !== null ? hex8(this.addr) : 'sem código';
-          s.title = (this.bp ? 'breakpoint · ' : '') + (this.dbg ? 'linha atual · ' : '') + where;
+          s.title = (pend ? 'breakpoint pendente: linha nova desde a montagem da imagem carregada (remonte) · ' : this.bp ? 'breakpoint · ' : '') +
+            (this.dbg ? 'linha atual · ' : '') + where;
           return s;
         }
       }
@@ -147,16 +168,18 @@
         class: 'cm-ks-gutter',
         lineMarker(view, line) {
           const st = view.state;
-          let bp = false, addr = null;
+          let bp = false, addr = null, pend = false;
           st.field(bpField).between(line.from, line.to, () => { bp = true; });
+          st.field(pendField).between(line.from, line.to, () => { pend = true; });
           st.field(codeField).between(line.from, line.to, (f, to, m) => { addr = m.addr; });
           const d = st.field(dbgField);
           const dbg = d !== null && d >= line.from && d <= line.to;
           if (!bp && !dbg && addr === null) return null;
-          return new LineMarker(bp, dbg, addr);
+          return new LineMarker(bp, dbg, addr, pend);
         },
         lineMarkerChange: (u) => u.startState.field(bpField) !== u.state.field(bpField) ||
-          u.startState.field(dbgField) !== u.state.field(dbgField) || u.startState.field(codeField) !== u.state.field(codeField),
+          u.startState.field(dbgField) !== u.state.field(dbgField) || u.startState.field(codeField) !== u.state.field(codeField) ||
+          u.startState.field(pendField) !== u.state.field(pendField),
         initialSpacer: () => new LineMarker(true, false, null),
         domEventHandlers: {
           mousedown(view, line) {
@@ -166,7 +189,7 @@
         }
       });
 
-      this._fx = { bpToggle, bpSet, bpField, dbgSet, dbgField, codeSet, codeField };
+      this._fx = { bpToggle, bpSet, bpField, dbgSet, dbgField, codeSet, codeField, pendSet, pendField };
 
       /* ---- linguagem e realce ---- */
       const lang = C.StreamLanguage.define(Object.assign({}, KsasmLang.streamParser, {
@@ -228,6 +251,8 @@
       extraKeys.push({ key: 'F9', run: () => { self.toggleBreakpoint(); return true; } });
 
       const listener = C.EditorView.updateListener.of((u) => {
+        /* antes do _silent: o mapa da imagem carregada precisa de toda mudança */
+        if (u.docChanged && self.active !== null && self.opts.onDocChanges) self.opts.onDocChanges(self.active, u.changes);
         if (self._silent || !self.active) return;
         if (u.docChanged && self.opts.onChange) self.opts.onChange(self.active, u.state.doc.toString());
         if (u.selectionSet || u.docChanged) {
@@ -274,7 +299,7 @@
         hover,
         lang,
         C.syntaxHighlighting(hl),
-        bpField, dbgField, codeField,
+        bpField, dbgField, codeField, pendField,
         C.EditorState.phrases.of(PHRASES_PT),
         C.Prec.high(C.keymap.of(extraKeys)),
         C.keymap.of([
@@ -303,7 +328,10 @@
     _apply(name, spec) {
       if (name === this.active) { this._silent = !spec.userEvent; this.view.dispatch(spec); this._silent = false; return; }
       const st = this.states.get(name);
-      if (st) this.states.set(name, st.update(spec).state);
+      if (!st) return;
+      const tr = st.update(spec);
+      if (tr.docChanged && this.opts.onDocChanges) this.opts.onDocChanges(name, tr.changes);
+      this.states.set(name, tr.state);
     }
 
     has(name) { return this.states.has(name) || this.active === name; }
@@ -348,7 +376,11 @@
 
     setText(name, text) {
       const st = this._state(name);
-      if (!st) { this.states.set(name, this._newState(text)); return; }
+      if (!st) {
+        this.states.set(name, this._newState(text));
+        if (this.opts.onDocChanges) this.opts.onDocChanges(name, null);
+        return;
+      }
       if (st.doc.toString() === text) return;
       this._apply(name, { changes: { from: 0, to: st.doc.length, insert: text } });
     }
@@ -393,6 +425,8 @@
     }
 
     setBreakpoints(name, lines) { if (this._state(name)) this._apply(name, { effects: this._fx.bpSet.of(lines || []) }); }
+
+    setPendingLines(name, lines) { if (this._state(name)) this._apply(name, { effects: this._fx.pendSet.of(lines || []) }); }
 
     getBreakpoints(name) { const st = this._state(name); return st ? this._bpLines(st) : []; }
 

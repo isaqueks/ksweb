@@ -212,6 +212,7 @@ code { font-family: var(--mono); font-size: 0.95em; }
 .cm-ks-mark { display: inline-block; width: 14px; text-align: center; line-height: inherit; }
 .cm-ks-mark.code { color: var(--muted); }
 .cm-ks-mark.bp { color: var(--bp); font-size: 12px; }
+.cm-ks-mark.bp.pending { color: var(--muted); }
 .cm-ks-mark.dbg { color: var(--warn); }
 .cm-ks-mark.bp.dbg { color: var(--bp); text-shadow: 0 0 0 var(--warn); }
 .cm-debug-line { background: var(--debug-line) !important; }

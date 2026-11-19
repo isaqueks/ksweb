@@ -56,7 +56,18 @@ código-fonte. Funciona offline, inclusive no arquivo único
    (Shift+F11) roda até o `ret` que sai da função atual; **Continuar** (F5)
    até o próximo breakpoint. Em todos, um breakpoint no caminho interrompe.
 8. **Fonte editado depois da montagem**: uma faixa avisa que a imagem na
-   VM está desatualizada; Executar/Reiniciar remontam.
+   VM está desatualizada; Executar/Reiniciar remontam. Enquanto isso a
+   depuração continua certa: breakpoints e linha atual usam o mapa linha ↔
+   endereço **da imagem carregada**, e as edições feitas desde aquela
+   montagem são acompanhadas (as transações do editor). Inserir ou apagar
+   linhas acima de um breakpoint o leva junto, e ele continua na mesma
+   instrução da imagem; ao parar, a seta vai para a linha atual daquela
+   instrução. Um breakpoint numa linha nova (que não existia na montagem)
+   fica **pendente** (○ cinza no gutter, "linha nova: remonte" na lista) e
+   não vai para a VM; se a linha do pc foi apagada ou reescrita inteira, a
+   seta some e o Desassembly mostra o pc. Ctrl+B durante a depuração monta
+   e atualiza o Desassembly, mas o mapa ativo só muda quando a nova imagem
+   é carregada (Executar/Reiniciar).
 9. **Watch**: digite um rótulo ou endereço; a cada parada mostra o endereço
    e o conteúdo como word, byte, float e string.
 
@@ -139,9 +150,12 @@ principal e os breakpoints) ou qualquer `.zip` com `.ksasm/.asm/.s/.inc/.txt/.md
 - O passo por cima/sair da função conta `call`/`callr`/`ret` executados:
   uma função que volta por `jmpr` ou que desempilha o endereço de retorno à
   mão não é reconhecida (o passo roda até o fim ou até um breakpoint).
-- A linha atual usa o mapa linha ↔ endereço da imagem carregada; com o
-  fonte editado depois (faixa de "desatualizado"), a linha mostrada é a da
-  montagem.
+- Com a imagem desatualizada, uma linha editada só em parte continua
+  sendo a instrução da imagem; uma linha substituída inteira (selecionar e
+  digitar por cima, colar) conta como nova. Renomear, ou substituir um
+  arquivo pela importação, deixa os breakpoints dele pendentes até
+  remontar. O painel Desassembly mostra a última montagem (Ctrl+B), não
+  necessariamente a imagem que está na VM.
 - Sem `kscc` (C) no navegador e sem o grupo 3 de syscalls (arquivos):
   04-roadmap.md.
 - Um só projeto aberto por aba do navegador; duas abas da IDE no mesmo

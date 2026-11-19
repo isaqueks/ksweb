@@ -207,7 +207,10 @@ worker manda o `snapshot`; o `pc` volta a `(arquivo, linha)` pelo mesmo
 mapa e a IDE abre a aba e destaca a linha. Passo por cima e sair da função
 são paradas por profundidade de chamadas no laço C (02-api.md,
 `ksweb_frame_stop`). Editar o fonte depois da montagem marca a imagem como
-desatualizada (um contador de versão do projeto); Executar remonta.
+desatualizada (um contador de versão do projeto); Executar remonta. Até
+lá, breakpoints e linha atual usam o mapa da imagem carregada e as
+ChangeSets do CodeMirror compostas desde aquela montagem
+(`AsmTools.curLineToBuild`/`buildLineToCur`, 07-ide.md).
 
 ## 7. Assembler no navegador
 

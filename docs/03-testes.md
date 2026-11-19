@@ -15,11 +15,12 @@ pelo Makefile da ksvm2.
 | `test/test_isa.js` | 9 | `isa.json` × `isa.def` e as tabelas do ksas |
 | `test/test_asmtools.js` | 23 | erros (nomes normalizados), alcance dos `.include`, listing, mapa linha ↔ endereço, breakpoint movido, tokenizer, autocomplete, ajuda |
 | `test/test_project.js` | 11 | explorador, IndexedDB falso e fallbacks, `.zip` e inflate |
+| `test/test_srcmap.js` | 9 | linha atual ↔ linha da montagem com ChangeSets reais do CodeMirror (imagem desatualizada) |
 | `test/test_worker.js` | 5 | o `worker.js` num contexto vm: passo por cima/sair da função com entrada pendente, Passo N, breakpoint |
 | `test/check_dist.js` | 21 | `dist/`, `ksweb-single.html` e os dois workers pelo protocolo de mensagens |
 | `test/browser_smoke.js` | opcional | a IDE num Chrome/Edge headless (`make test-browser`) |
 
-Total do `make test`: 311 casos em 11 suítes.
+Total do `make test`: 320 casos em 12 suítes.
 
 ## `run_node.js`
 
@@ -174,6 +175,18 @@ inflate contra o zlib do Node em todos os níveis (stored, fixo, dinâmico),
 `.zip` com pasta-raiz e entradas deflate, manifesto, e o zip gerado aberto
 pelo `zipfile` do Python.
 
+## `test_srcmap.js`
+
+Carrega o bundle do CodeMirror num contexto `vm`, monta um fonte com o
+`ksas.wasm` e o edita com transações reais (várias compostas, como a IDE
+acumula): 3 linhas inseridas acima, linhas digitadas logo acima, Enter no
+começo da linha, linhas apagadas acima, edição dentro da linha, a linha
+apagada ou substituída inteira, edições abaixo e uma mistura. Confere que
+o breakpoint na linha atual cai no mesmo endereço da imagem antiga, que a
+linha nova é pendente (`null`), que o pc volta à linha atual certa (ou a
+nenhuma, se a linha sumiu), a ida e volta das linhas, e que uma ChangeSet
+que não bate com os textos dá "desconhecido".
+
 ## `test_worker.js`
 
 Carrega `web/worker.js` num contexto `vm` do Node (`self`, `postMessage`,
@@ -269,7 +282,10 @@ DevTools Protocol (`make test-browser`, ou pelo Node do Windows:
   novo e F11 para dentro (a aba `lib/io.ksasm` abre na linha do `subi sp`),
   Shift+F11 de volta ao chamador, breakpoint no rótulo `loop:` movido para
   a instrução seguinte (gutter e lista "movido"), Limpar e terminar (`0 1 1
-  2 3`), Ctrl+S e **recarregar a página** (o projeto editado volta do
+  2 3`), antes disso **3 linhas inseridas acima dos breakpoints com a imagem
+  antiga** (mesmos endereços nas linhas +3, breakpoint numa linha nova
+  pendente, Ctrl+B com o código deslocado não troca o mapa, Continuar para
+  na mesma instrução com a seta na linha nova), Ctrl+S e **recarregar a página** (o projeto editado volta do
   IndexedDB), breakpoint clicando numa instrução do Desassembly (vira o
   breakpoint da linha do fonte; o pc fica destacado no desassembly), e o
   **modo simples** (`hello.ksx` pelo seletor de arquivo roda direto e o

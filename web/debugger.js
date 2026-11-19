@@ -269,10 +269,11 @@
       for (const b of list) {
         const names = b.addr !== null && b.addr !== undefined ? this.symByAddr.get(b.addr) : null;
         const li = h('li', {},
-          h('span', {}, b.addr !== null && b.addr !== undefined ? '0x' + F().hex(b.addr) : '(sem código)'),
+          h('span', {}, b.addr !== null && b.addr !== undefined ? '0x' + F().hex(b.addr) : b.pending ? '(pendente)' : '(sem código)'),
           b.file ? h('a', { onclick: () => this.app.gotoSource && this.app.gotoSource(b.file, b.line), title: 'ir para o fonte' }, b.file + ':' + b.line) : null,
           names ? h('span', { class: 'src' }, names.join(', ')) : null,
           b.moved ? h('span', { class: 'src', title: 'a linha marcada não gera código' }, '(movido da ' + b.moved + ')') : null,
+          b.pending ? h('span', { class: 'src', title: 'a linha é nova desde a montagem da imagem carregada: o breakpoint vale depois de remontar (Executar/Reiniciar)' }, 'linha nova: remonte') : null,
           h('button', { class: 'small', title: 'remover', 'aria-label': 'remover breakpoint', onclick: () => {
             if (b.kind === 'addr') this.bps.delete(b.addr); else if (this.app.removeBreakpoint) this.app.removeBreakpoint(b);
             this.sync();

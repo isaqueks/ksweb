@@ -184,6 +184,56 @@
     return { line: l, addr: info.lines.get(file + '\n' + l).addr, moved: l !== line };
   }
 
+  /* ---- linhas do fonte atual <-> linhas do fonte da montagem ----
+   *
+   * A imagem na VM vem de uma montagem; o fonte pode ter sido editado
+   * depois. desc é a ChangeDesc do CodeMirror 6 (as transações compostas)
+   * que leva o texto da montagem (A) ao texto atual (B); undefined = sem
+   * edições. Usa só desc.length, desc.newLength, desc.mapPos,
+   * desc.invertedDesc e desc.iterChangedRanges.
+   *   curLineToBuild(desc, curText, buildText, line) -> linha na montagem,
+   *       ou null se a linha atual é nova (inteira dentro de texto inserido)
+   *   buildLineToCur(desc, buildText, curText, line) -> linha atual, ou null
+   *       se a linha da montagem foi apagada/substituída inteira
+   * Qualquer incoerência (tamanhos que não batem) também dá null. */
+  function lineStarts(text) {
+    const s = [0];
+    for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) s.push(i + 1);
+    return s;
+  }
+  function lineRange(starts, text, line) {
+    if (!Number.isInteger(line) || line < 1 || line > starts.length) return null;
+    return [starts[line - 1], line < starts.length ? starts[line] - 1 : text.length];
+  }
+  function lineAtPos(starts, pos) {
+    let lo = 0, hi = starts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= pos) lo = mid; else hi = mid - 1; }
+    return lo + 1;
+  }
+  /* [from, to] inteiro dentro de um trecho alterado não vazio (lado A ou B) */
+  function insideChange(desc, from, to, sideB) {
+    let hit = false;
+    desc.iterChangedRanges((fA, tA, fB, tB) => {
+      const f = sideB ? fB : fA, t = sideB ? tB : tA;
+      if (t > f && f <= from && to <= t) hit = true;
+    });
+    return hit;
+  }
+  function curLineToBuild(desc, curText, buildText, line) {
+    if (desc === undefined) return curText === buildText && lineRange(lineStarts(buildText), buildText, line) ? line : null;
+    if (!desc || desc.length !== buildText.length || desc.newLength !== curText.length) return null;
+    const r = lineRange(lineStarts(curText), curText, line);
+    if (!r || insideChange(desc, r[0], r[1], true)) return null;
+    return lineAtPos(lineStarts(buildText), desc.invertedDesc.mapPos(r[0], 1));
+  }
+  function buildLineToCur(desc, buildText, curText, line) {
+    if (desc === undefined) return curText === buildText && lineRange(lineStarts(curText), curText, line) ? line : null;
+    if (!desc || desc.length !== buildText.length || desc.newLength !== curText.length) return null;
+    const r = lineRange(lineStarts(buildText), buildText, line);
+    if (!r || insideChange(desc, r[0], r[1], false)) return null;
+    return lineAtPos(lineStarts(curText), desc.mapPos(r[0], 1));
+  }
+
   /* Arquivos alcançados a partir de main pelos .include (estático, como o
    * ksas resolve: relativo ao arquivo que inclui). Serve para saber se um
    * arquivo faz parte da montagem quando ela falhou e não há listing. */
@@ -261,7 +311,7 @@
 
   const api = {
     assemble, disassemble, parseDiagnostics, parseListing, buildDebugInfo, resolveBreakpoint,
-    parseKsdis, byteColToChar, normFile, includeClosure, OUT_KSX, OUT_LST
+    parseKsdis, byteColToChar, normFile, includeClosure, curLineToBuild, buildLineToCur, OUT_KSX, OUT_LST
   };
   if (isNode) module.exports = api;
   else root.AsmTools = api;
