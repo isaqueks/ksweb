@@ -62,7 +62,7 @@
     image: null, imageName: '', imageSource: null, imageVersion: -1, header: null,
     vmState: 'idle', loaded: false, pendingRun: false, stopAtEntry: false, debugSession: false,
     ksxMode: false, disRows: [], disImage: null, pc: null, insns: 0, ips: 0,
-    memSeq: 2000000, memWait: new Map(), watches: [], saveTimer: null, lintTimer: null
+    memSeq: 2000000, memWait: new Map(), watches: [], saveTimer: null, lintTimer: null, events: []
   };
   let term, dbg, editor, layout;
 
@@ -229,7 +229,15 @@
     if (res) { S.asm.pending.delete(m.id); res(m); }
   }
 
+  /* Últimos eventos (mensagens do worker da VM e abas abertas), para
+   * depurar a própria IDE: ksweb.state.events no console. */
+  function note(s) {
+    S.events.push(Math.round(performance.now()) + ' ' + s);
+    if (S.events.length > 80) S.events.shift();
+  }
+
   function onWorker(m) {
+    if (m.type !== 'output' && m.type !== 'progress') note('vm ' + m.type + (m.state ? ' ' + m.state : '') + (m.cpu ? ' pc=' + hex8(m.cpu.pc) : m.pc !== undefined ? ' pc=' + hex8(m.pc) : ''));
     switch (m.type) {
       case 'ready':
         S.ready = true;
@@ -570,7 +578,8 @@
   }
 
   function addAddrBreakpoint(addr) {
-    const info = currentInfo();
+    /* o desassembly do painel é o da última montagem (mesmo sem imagem carregada) */
+    const info = S.ksxMode || S.imageSource === 'ksx' && S.loaded ? null : (S.built ? S.built.result.info : null);
     const loc = info && info.addrLine.get(addr >>> 0);
     if (loc && S.project.has(loc.file)) {
       const lines = (S.project.breakpoints.get(loc.file) || []).concat([loc.line]);
@@ -756,6 +765,7 @@
 
   function openTab(name) {
     if (!S.project.has(name)) return;
+    if (editor.active !== name) note('aba ' + name);
     leaveKsx();
     const fresh = !editor.has(name);
     S.project.openFile(name);

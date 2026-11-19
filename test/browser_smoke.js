@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 /*
- * browser_smoke.js — teste de fumaça da página num Chrome/Edge real, pelo
+ * browser_smoke.js — teste de fumaça da IDE num Chrome/Edge real, pelo
  * DevTools Protocol (opcional: fora do "make test", que não exige
  * navegador). Requer Node >= 22 (WebSocket global).
  *
  *   node test/browser_smoke.js [--chrome CAMINHO] [--dist dist] [--shots DIR]
  *
  * Abre dist/ksweb-single.html por file:// e dist/index.html por HTTP (um
- * servidor estático embutido), e em cada um: espera o wasm, roda exemplos
- * pelo menu (hello, vtdemo, float), digita no terminal para o exemplo de
- * stdin (modo linha, Enter, Ctrl+D), abre o depurador, para num breakpoint,
- * dá um passo e confere registradores/disassembly/memória. Falha em
- * qualquer exceção ou console.error da página. --shots salva PNGs.
+ * servidor estático embutido), e em cada um:
+ *   - exemplos pelo menu (hello, vtdemo, float), stdin no modo linha e no
+ *     raw (maiusculas, ask_name);
+ *   - o roteiro da IDE: abrir o exemplo fib, editar o fonte (lint sem
+ *     erros), montar com Ctrl+B, breakpoint clicando no gutter, F5 até
+ *     parar (linha destacada no editor), F10 por cima do call, F11 para
+ *     dentro (abre a aba de lib/io.ksasm), Shift+F11 de volta, ler
+ *     registradores, breakpoint em linha sem código movido para a próxima,
+ *     remover e terminar, recarregar a página (projeto recuperado do
+ *     IndexedDB), desassembly com breakpoint por endereço;
+ *   - modo simples: um .ksx pelo seletor de arquivo roda direto e mostra o
+ *     desassembly; F1 abre a ajuda.
+ * Falha em qualquer exceção ou console.error da página. --shots salva PNGs.
  */
 'use strict';
 const fs = require('fs');
@@ -39,7 +47,7 @@ let failures = 0;
 const log = (...a) => console.log(...a);
 
 function serve(dir) {
-  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.ksx': 'application/octet-stream' };
+  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.ksx': 'application/octet-stream', '.json': 'application/json' };
   const srv = http.createServer((req, res) => {
     const p = path.join(dir, decodeURIComponent(req.url.split('?')[0]).replace(/^\/$/, '/index.html'));
     if (!p.startsWith(dir) || !fs.existsSync(p)) { res.writeHead(404); res.end(); return; }
@@ -48,6 +56,8 @@ function serve(dir) {
   });
   return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
 }
+
+const VK = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, F1: 112, F5: 116, F9: 120, F10: 121, F11: 122 };
 
 class Cdp {
   constructor(ws) {
@@ -71,22 +81,32 @@ class Cdp {
   async until(expr, ms, what) {
     const t0 = Date.now();
     for (;;) {
-      const v = await this.eval(expr);
+      let v = null;
+      try {
+        v = await this.eval('(() => { const v = (' + expr + '); return v && typeof v === "object" ? true : v; })()');
+      } catch (e) {
+        if (Date.now() - t0 > (ms || 8000)) throw e;        /* página ainda carregando */
+      }
       if (v) return v;
       if (Date.now() - t0 > (ms || 8000)) throw new Error('timeout: ' + (what || expr));
       await sleep(50);
     }
   }
+  /* modifiers: 1 Alt, 2 Ctrl, 4 Meta, 8 Shift */
   async key(key, opts) {
     opts = opts || {};
-    const special = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39 };
-    const vk = special[key] || key.toUpperCase().charCodeAt(0);
-    const base = { key, code: key.length === 1 ? 'Key' + key.toUpperCase() : key, windowsVirtualKeyCode: vk, modifiers: opts.modifiers || 0 };
-    const text = key === 'Enter' ? '\r' : (key.length === 1 && !opts.modifiers ? key : undefined);
+    const vk = VK[key] || key.toUpperCase().charCodeAt(0);
+    const code = key.length === 1 ? (/[a-z]/i.test(key) ? 'Key' + key.toUpperCase() : 'Digit' + key) : key;
+    const base = { key, code, windowsVirtualKeyCode: vk, modifiers: opts.modifiers || 0 };
+    const text = key === 'Enter' ? '\r' : (key.length === 1 && !(opts.modifiers & 2) ? key : undefined);
     await this.send('Input.dispatchKeyEvent', Object.assign({ type: text ? 'keyDown' : 'rawKeyDown', text }, base));
     await this.send('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, base));
   }
   async type(s) { for (const ch of s) await this.key(ch); }
+  async click(x, y) {
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+  }
   async shot(name) {
     if (!SHOTS) return;
     const r = await this.send('Page.captureScreenshot', { format: 'png' });
@@ -102,28 +122,53 @@ class Cdp {
 }
 
 const termText = 'document.querySelector("#term").innerText';
+const vmState = 'ksweb.state.vmState';
 const pickExpr = (name) => `(() => { const s = document.querySelector('#examples'); s.value = '${name}'; s.dispatchEvent(new Event('change')); return true; })()`;
+/* linha (1-based) da seta da depuração no editor, ou null */
+const debugLine = '(() => { const v = ksweb.editor.view, p = v.state.field(ksweb.editor._fx.dbgField); return p === null ? null : v.state.doc.lineAt(p).number; })()';
+const activeTab = "((document.querySelector('#tabs .tab[aria-selected=true]') || {}).title || null)";
 
 async function check(label, fn) {
   try { await fn(); log('  ok  ' + label); } catch (e) { failures++; log('  FALHA ' + label + ': ' + e.message); }
 }
 
+/* Centro do gutter de breakpoints na linha n do arquivo ativo. */
+async function gutterXY(cdp, n) {
+  await cdp.eval(`(() => { const v = ksweb.editor.view; v.dispatch({ effects: CM.EditorView.scrollIntoView(v.state.doc.line(${n}).from, { y: 'center' }) }); return true; })()`);
+  await cdp.eval('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
+  return cdp.eval(`(() => {
+    const v = ksweb.editor.view;
+    const b = v.lineBlockAt(v.state.doc.line(${n}).from);
+    const g = document.querySelector('.cm-ks-gutter').getBoundingClientRect();
+    const top = v.documentTop + b.top;
+    return [g.left + g.width / 2, top + b.height / 2];
+  })()`);
+}
+async function lineOf(cdp, re) {
+  return cdp.eval(`(() => { const d = ksweb.editor.view.state.doc; for (let i = 1; i <= d.lines; i++) if (${re}.test(d.line(i).text)) return i; return null; })()`);
+}
+
 async function scenario(cdp, label) {
-  /* escolhe um exemplo e espera a tela já limpa mostrar a carga dele (o
-   * redesenho é no próximo quadro: sem isso innerText ainda é o anterior) */
   cdp.pick = async (name) => {
     await cdp.eval(pickExpr(name));
-    await cdp.until('document.querySelector("#prog-name").textContent === "' + name + '.ksx"', 5000, 'carga de ' + name);
+    await cdp.until('document.querySelector("#prog-name").textContent === "' + name + '.ksx"', 8000, 'carga de ' + name);
     await cdp.eval('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
   };
   log(label);
-  await check('wasm carregado', () => cdp.until(termText + '.includes("em WebAssembly")', 10000));
-  await check('hello', async () => {
+  await check('wasm e assembler carregados', async () => {
+    await cdp.until(termText + '.includes("em WebAssembly")', 10000);
+    await cdp.until('ksweb.state.asm.ready', 10000, 'asm worker');
+    await cdp.until('document.querySelector(".cm-editor .cm-content")', 5000, 'editor');
+    await cdp.eval('(ksweb.layout._size("bottom", 560), true)');      /* terminal com linhas para o vtdemo */
+  });
+  await check('hello (exemplo vira projeto e roda)', async () => {
     await cdp.pick('hello');
     await cdp.until(termText + '.includes("fim: código de saída 0")', 8000);
     const t = await cdp.eval(termText);
     if (!t.includes('Hello, KSVM!')) throw new Error('sem saída: ' + t.slice(0, 300));
     if (!t.includes('entry 0x00000000')) throw new Error('sem cabeçalho');
+    const files = await cdp.eval('ksweb.state.project.fileNames().join(",")');
+    if (files !== 'hello.ksasm') throw new Error('arquivos: ' + files);
   });
   await check('vtdemo (caixa DEC, cores)', async () => {
     await cdp.pick('vtdemo');
@@ -143,7 +188,7 @@ async function scenario(cdp, label) {
   });
   await check('stdin: modo linha, Enter, Ctrl+D', async () => {
     await cdp.pick('maiusculas');
-    await cdp.until('document.querySelector("#status").dataset.state === "waiting"', 8000, 'esperando entrada');
+    await cdp.until(vmState + ' === "waiting"', 8000, 'esperando entrada');
     await cdp.eval('document.querySelector("#term").focus()');
     await cdp.type('abc');
     await cdp.key('Enter');
@@ -159,38 +204,119 @@ async function scenario(cdp, label) {
   await check('modo raw: tecla vai direto', async () => {
     await cdp.eval('(() => { const s = document.querySelector("#opt-mode"); s.value = "raw"; s.dispatchEvent(new Event("change")); })()');
     await cdp.pick('ask_name');
-    await cdp.until('document.querySelector("#status").dataset.state === "waiting"', 8000);
+    await cdp.until(vmState + ' === "waiting"', 8000);
     await cdp.eval('document.querySelector("#term").focus()');
     await cdp.type('Zoe');
-    await cdp.eval('(() => { document.querySelector("#btn-eof").click(); })()');
+    await cdp.eval('document.querySelector("#btn-eof").click()');
     await cdp.until(termText + '.includes("Your name is Zoe")', 4000);
     await cdp.eval('(() => { const s = document.querySelector("#opt-mode"); s.value = "line"; s.dispatchEvent(new Event("change")); })()');
   });
-  await check('depurador: breakpoint, passo, registradores, memória', async () => {
-    await cdp.eval('document.querySelector("#opt-autorun").checked = false');
-    await cdp.eval('document.querySelector("#btn-dbg").click()');
+
+  /* ---- roteiro da IDE ---- */
+  let callLine = null;
+  await check('IDE: abrir exemplo, editar, lint e Ctrl+B', async () => {
     await cdp.pick('fib');
-    await cdp.until('!document.querySelector("#btn-run").disabled', 5000, 'pronto');
-    await cdp.until('document.querySelectorAll("#dbg-dis .dl").length > 5', 5000, 'disassembly');
-    /* breakpoint clicando na 4a linha do disassembly */
-    const addr = await cdp.eval('(() => { const l = document.querySelectorAll("#dbg-dis .dl")[3]; l.click(); return l.querySelector(".ad").textContent; })()');
-    await cdp.until('document.querySelector("#dbg-bps").innerText.includes("0x' + addr + '")', 3000, 'lista de bps');
-    await cdp.eval('document.querySelector("#btn-run").click()');
-    await cdp.until('document.querySelector("#status").dataset.state === "break"', 5000, 'parou no bp');
-    const cur = await cdp.eval('document.querySelector("#dbg-dis .dl.cur .ad").textContent');
-    if (cur !== addr) throw new Error('pc ' + cur + ' != bp ' + addr);
-    await cdp.eval('document.querySelector("#btn-step").click()');
-    await cdp.until('document.querySelectorAll("#dbg-regs td.chg").length > 0', 3000, 'registradores alterados destacados');
-    const regs = await cdp.eval('document.querySelector("#dbg-regs").innerText');
-    if (!/sp\s+0x/.test(regs) || !/flags/.test(regs)) throw new Error('tabela: ' + regs.slice(0, 200));
+    await cdp.until(termText + '.includes("4181")', 8000, 'fib roda');
+    const n = await lineOf(cdp, '/^COUNT = 20/');
+    if (!n) throw new Error('linha COUNT');
+    await cdp.eval(`(() => { const v = ksweb.editor.view, l = v.state.doc.line(${n}); v.dispatch({ selection: { anchor: l.to - 2, head: l.to } }); v.focus(); })()`);
+    await cdp.send('Input.insertText', { text: '5' });
+    await cdp.until('ksweb.state.project.text("fib.ksasm").includes("COUNT = 5\\n")', 3000, 'texto no projeto');
+    await cdp.until('ksweb.state.lint && ksweb.state.lint.version === ksweb.state.version', 4000, 'lint');
+    const errs = await cdp.eval('document.querySelector("#problem-count").textContent');
+    if (errs !== '0') throw new Error('erros de lint: ' + errs);
+    await cdp.key('b', { modifiers: 2 });
+    await cdp.until('document.querySelector("#asm-output").textContent.includes("= 0x00000005")', 4000, 'listing do Ctrl+B');
+    await cdp.until('document.querySelectorAll("#disasm .dr.code").length > 40', 4000, 'desassembly');
+  });
+  await check('IDE: breakpoint no gutter, F5 até parar', async () => {
+    callLine = await lineOf(cdp, '/^\\s+call\\s+print_u32/');
+    const [x, y] = await gutterXY(cdp, callLine);
+    await cdp.click(x, y);
+    await cdp.until('ksweb.breakpoints().some((b) => b.line === ' + callLine + ' && b.addr === 0x10)', 3000, 'bp resolvido em 0x10');
+    await cdp.eval('ksweb.editor.focus()');
+    await cdp.key('F5');
+    await cdp.until(vmState + ' === "break"', 5000, 'parou');
+    await cdp.until(debugLine + ' === ' + callLine, 3000, 'linha destacada');
+    await cdp.until('document.querySelector(".cm-debug-line")', 2000, 'decoração da linha');
+    await cdp.shot(label + '-ide-break');
+  });
+  await check('IDE: F10 por cima do call, registradores', async () => {
+    await cdp.key('F10');
+    await cdp.until(debugLine + ' === ' + (callLine + 1), 4000, 'linha seguinte ao call');
+    await cdp.until('/\\n0\\s*$/.test(' + termText + ')', 3000, 'print_u32 escreveu 0');
+    const reg = (n) => cdp.eval('(() => { const t = [...document.querySelectorAll("#dbg-regs td.rn")].find((x) => x.textContent === "' + n + '"); return t ? t.nextElementSibling.textContent + " " + t.nextElementSibling.nextElementSibling.textContent : null; })()');
+    const r17 = await reg('r17');
+    if (r17 !== '0x00000001 1') throw new Error('r17 = 1 (b do Fibonacci): ' + r17);
+    if (!/^0x[0-9A-F]{8} /.test(await reg('sp'))) throw new Error('tabela sem sp');
+    if (!(await cdp.eval('[...document.querySelectorAll("#dbg-regs td.rn")].some((x) => x.textContent === "flags")'))) throw new Error('tabela sem flags');
+    await cdp.until('document.querySelectorAll("#dbg-regs td.chg").length > 0', 3000, 'alterados destacados');
     await cdp.until('document.querySelectorAll("#dbg-mem .hl").length === 16', 3000, 'hexdump');
     await cdp.until('document.querySelectorAll("#dbg-stack .sl").length === 32', 3000, 'pilha');
-    await cdp.shot(label + '-debugger');
-    await cdp.eval('document.querySelector("#dbg-bps button").click()');
+  });
+  await check('IDE: F11 entra em lib/io.ksasm, Shift+F11 volta', async () => {
+    await cdp.key('F5');
+    await cdp.until(vmState + ' === "break" && ' + debugLine + ' === ' + callLine, 5000, 'parou de novo no call');
+    await cdp.key('F11');
+    await cdp.until(activeTab + ' === "lib/io.ksasm"', 4000, 'aba do arquivo incluído');
+    await cdp.until(debugLine + ' !== null && /subi\\s+sp/.test(ksweb.editor.view.state.doc.line(' + debugLine + ').text)', 3000,
+      'linha de print_u32 destacada');
+    await cdp.key('F11', { modifiers: 8 });
+    await cdp.until(activeTab + ' === "fib.ksasm" && ' + debugLine + ' === ' + (callLine + 1), 4000, 'voltou ao chamador');
+    await cdp.shot(label + '-ide-out');
+  });
+  await check('IDE: breakpoint em linha sem código vai para a próxima', async () => {
+    const lbl = await lineOf(cdp, '/^loop:/');
+    if (!lbl) throw new Error('"loop:" não achado no arquivo ativo ' + await cdp.eval(activeTab) + ': ' + await cdp.eval('ksweb.state.events.slice(-25).join(" / ")'));
+    const [x, y] = await gutterXY(cdp, lbl);
+    await cdp.click(x, y);
+    await cdp.until('ksweb.breakpoints().some((b) => b.line === ' + (lbl + 1) + ' && b.moved === ' + lbl + ')', 3000, 'movido de loop: para a instrução');
+    const lines = await cdp.eval('ksweb.editor.getBreakpoints("fib.ksasm").join(",")');
+    if (lines !== (lbl + 1) + ',' + callLine) throw new Error('gutter: ' + lines);
+    await cdp.until('document.querySelector("#dbg-bps").innerText.includes("movido")', 2000, 'lista mostra o movimento');
+  });
+  await check('IDE: remover breakpoints e terminar; projeto recuperado ao recarregar', async () => {
+    await cdp.eval('document.querySelector("#dbg-bps").parentElement.querySelector("button:nth-of-type(2)").click()');
+    await cdp.until('ksweb.breakpoints().length === 0', 2000, 'Limpar');
+    await cdp.key('F5');
+    await cdp.until(termText + '.includes("fim: código de saída 0")', 5000, 'terminou');
+    const t = await cdp.eval(termText);
+    if (!/0 1 1 2 3\n/.test(t)) throw new Error('saída com COUNT = 5: ' + t.slice(-200));
+    await cdp.key('s', { modifiers: 2 });
+    await sleep(400);
+    await cdp.send('Page.reload');
+    await sleep(500);
+    await cdp.until('window.ksweb && ksweb.state.project && ksweb.state.project.name === "exemplo: fib"', 10000, 'projeto reaberto');
+    await cdp.until('ksweb.state.project.text("fib.ksasm").includes("COUNT = 5\\n")', 3000, 'edição persistida');
+    await cdp.until('ksweb.state.asm.ready && ksweb.state.ready', 10000, 'workers');
+  });
+  await check('IDE: desassembly com breakpoint por endereço', async () => {
+    await cdp.eval('ksweb.build()');
+    await cdp.until('document.querySelectorAll("#disasm .dr.code").length > 40', 4000);
+    await cdp.eval('document.querySelector("[data-panel=disasm]").click()');
+    await cdp.eval('document.querySelector("#disasm .dr.code[data-addr=\\"16\\"]").click()');
+    await cdp.until('ksweb.breakpoints().some((b) => b.addr === 16 && b.file === "fib.ksasm")', 2000, 'vira breakpoint de fonte');
     await cdp.eval('document.querySelector("#btn-run").click()');
-    await cdp.until(termText + '.includes("4181")', 5000, 'termina sem bp');
-    await cdp.eval('document.querySelector("#opt-autorun").checked = true');
-    await cdp.eval('document.querySelector("#btn-dbg").click()');
+    await cdp.until(vmState + ' === "break"', 5000, 'parou');
+    await cdp.until('document.querySelector("#disasm .dr.cur") && document.querySelector("#disasm .dr.cur").dataset.addr === "16"', 3000, 'pc destacado no desassembly');
+    await cdp.shot(label + '-disasm');
+    await cdp.eval('document.querySelector("#disasm .dr.code[data-addr=\\"16\\"]").click()');
+    await cdp.eval('document.querySelector("#btn-continue").click()');
+    await cdp.until(termText + '.includes("fim: código de saída 0")', 5000);
+  });
+  await check('modo simples: .ksx roda direto com desassembly; F1', async () => {
+    const doc = await cdp.send('DOM.getDocument');
+    const n = await cdp.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: '#file-ksx' });
+    await cdp.send('DOM.setFileInputFiles', { nodeId: n.nodeId, files: [path.join(DIST, 'examples', 'hello.ksx')] });
+    await cdp.until(termText + '.includes("Hello, KSVM!")', 6000, 'executou');
+    await cdp.until('!document.querySelector("#ksx-view").hidden && document.querySelectorAll("#ksx-dis .dr.code").length > 3', 4000, 'desassembly no centro');
+    await cdp.shot(label + '-ksx');
+    await cdp.eval('document.body.focus()');
+    await cdp.key('F1');
+    await cdp.until('document.querySelector("#dlg-help").open', 2000, 'ajuda');
+    await cdp.key('Escape');
+    await cdp.until('!document.querySelector("#dlg-help").open', 2000, 'fecha');
+    await cdp.eval('ksweb.openTab(ksweb.state.project.main)');
   });
   const p = cdp.problems();
   await check('sem exceções nem console.error', async () => { if (p.length) throw new Error(p.join('\n')); });
@@ -204,7 +330,8 @@ async function openPage(url) {
   await cdp.send('Runtime.enable');
   await cdp.send('Log.enable');
   await cdp.send('Page.enable');
-  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+  await cdp.send('DOM.enable');
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 920, deviceScaleFactor: 1, mobile: false });
   await cdp.send('Page.reload');
   await sleep(300);
   return cdp;
@@ -213,7 +340,7 @@ async function openPage(url) {
 (async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ksweb-chrome-'));
   const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=' + PORT, '--user-data-dir=' + profile,
-    '--no-first-run', '--no-default-browser-check', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
+    '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--allow-file-access-from-files', 'about:blank'], { stdio: 'ignore' });
   let srv;
   try {
     for (let i = 0; i < 100; i++) {
@@ -230,6 +357,8 @@ async function openPage(url) {
       await light.until(termText + '.includes("em WebAssembly")', 10000);
       const bg = await light.eval('getComputedStyle(document.querySelector("#term")).backgroundColor');
       if (bg !== 'rgb(251, 251, 248)') throw new Error(bg);
+      const ed = await light.eval('getComputedStyle(document.querySelector(".cm-editor")).backgroundColor');
+      if (ed !== 'rgb(255, 255, 255)') throw new Error('editor: ' + ed);
       await light.eval(pickExpr('vtdemo'));
       await light.until(termText + '.includes("pronto!")', 10000);
       await light.shot('light-vtdemo');
