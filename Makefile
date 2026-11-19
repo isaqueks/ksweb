@@ -53,7 +53,7 @@ WASI_CORE_TOOLS = $(patsubst $(K)/src/core/%.c,$(BUILD)/wasi/core-tools/%.o,$(CO
 WASI_KSAS_OBJ   = $(patsubst $(K)/src/tools/ksas/%.c,$(BUILD)/wasi/ksas/%.o,$(KSAS_SRC_ALL))
 WASI_KSDIS_OBJ  = $(patsubst $(K)/src/tools/%.c,$(BUILD)/wasi/tools/%.o,$(KSDIS_SRC))
 
-# isa.json: tabela da ISA para o editor (tools/isadump nativo + tools/mkisa.js).
+# isa.json: tabela e fichas da ISA para o editor (tools/isadump nativo + tools/mkisa.js).
 ISADUMP  = $(NATIVE)/isadump
 ISA_JSON = $(BUILD)/web/isa.json
 ISA_JS   = $(BUILD)/web/isa.js
@@ -161,11 +161,14 @@ $(ISADUMP): tools/isadump.c $(KSAS_LIB_SRC) $(CORE_SRC) $(K)/include/ksvm/isa.de
 	$(HOSTCC) -std=c99 -O1 -I$(K)/include -I$(K)/src/tools/ksas tools/isadump.c \
 	    $(KSAS_LIB_SRC) $(CORE_SRC) -o $@
 
-$(ISA_JSON) $(ISA_JS) &: $(ISADUMP) tools/mkisa.js tools/ksasm-extra.json $(K)/include/ksvm/syscall.h
+# Fichas (resumo, detalhe, sintaxe, exemplo...): tools/isa-doc.md, escrito a
+# partir do doc 04 da ksvm2; faltar ou sobrar ficha faz o mkisa.js falhar.
+$(ISA_JSON) $(ISA_JS) &: $(ISADUMP) tools/mkisa.js tools/ksasm-extra.json tools/isa-doc.md \
+                         $(K)/include/ksvm/syscall.h $(K)/include/ksvm/fault.h
 	@mkdir -p $(dir $(ISA_JSON))
 	$(ISADUMP) >$(BUILD)/isa-raw.json
-	$(NODE) tools/mkisa.js $(BUILD)/isa-raw.json tools/ksasm-extra.json \
-	    $(K)/include/ksvm/syscall.h $(ISA_JSON) $(ISA_JS)
+	$(NODE) tools/mkisa.js $(BUILD)/isa-raw.json tools/ksasm-extra.json tools/isa-doc.md \
+	    $(K)/include/ksvm/syscall.h $(K)/include/ksvm/fault.h $(ISA_JSON) $(ISA_JS)
 
 # ---- Oráculo nativo -------------------------------------------------------
 
