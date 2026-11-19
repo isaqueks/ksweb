@@ -14,6 +14,8 @@
  *   KsasmLang.completionOptions(ctx, labels)
  *   KsasmLang.wordAt(lineText, col)  {word, from, to}
  *   KsasmLang.describe(word)         {kind, title, signature, detail, desc}
+ *   KsasmLang.target(word, tipo)     {kind, key} da ficha da ISA (isaref.js)
+ *   KsasmLang.helpAt(lineText, col, {line})  alvo da ajuda ao cursor
  *   KsasmLang.statementKind(text)    'insn' | 'directive' | 'equ' | 'label' | 'empty'
  *
  * Regras léxicas do ksas (lexer.c): comentários ';', '#' e '//';
@@ -410,9 +412,71 @@
     return null;
   }
 
+  /* ---- alvo da ajuda (ficha da referência) ---- */
+
+  const NUMBER = /^(0[xXbB][0-9a-fA-F_]+|\d[\d_]*)$/;
+
+  /*
+   * Palavra + tipo do token -> {kind, key} da ficha: insn | branch | pseudo |
+   * directive | register | syscall | sr (key = nome na tabela), label (key =
+   * o rótulo, como escrito) ou number; null para o resto (mnemônico
+   * desconhecido, pontuação). Só consulta o isa.json: nada é montado.
+   */
+  function target(word, tokenType) {
+    if (!word) return null;
+    if (NUMBER.test(word)) return { kind: 'number', key: word };
+    if (tokenType === 'invalid' || tokenType === 'comment' || tokenType === 'string' || tokenType === 'char') return null;
+    const l = word.toLowerCase();
+    if (tokenType !== 'label' && tokenType !== 'labelDef') {
+      if (tokenType !== 'register') {
+        if (V.insn.has(l)) return { kind: 'insn', key: l };
+        if (V.pseudo.has(l)) return { kind: 'pseudo', key: l };
+        if (V.branch.has(l)) return { kind: 'branch', key: l };
+      }
+      if (V.directive.has(l)) return { kind: 'directive', key: l };
+      if (isRegister(word)) return { kind: 'register', key: l };
+      if (tokenType === 'syscall' && V.syscall.has(l)) return { kind: 'syscall', key: V.syscall.get(l).name };
+      if (tokenType === 'syscall' && V.sr.has(l)) return { kind: 'sr', key: V.sr.get(l).name };
+    }
+    if (/^[A-Za-z_.]/.test(word)) return { kind: 'label', key: word };
+    return null;
+  }
+
+  /* Mnemônico/diretiva que abre o comando da linha (depois dos rótulos). */
+  function statementHead(lineText) {
+    const toks = tokenizeLine(lineText).filter((t) => t.type !== 'comment');
+    let i = 0;
+    while (i < toks.length && toks[i].type === 'labelDef' && toks[i + 1] && toks[i + 1].text === ':') i += 2;
+    const t = toks[i];
+    return t && (t.type === 'mnemonic' || t.type === 'pseudo' || t.type === 'directive') ? t : null;
+  }
+
+  /*
+   * Ajuda para a coluna col (0-based) da linha: {kind, key, word, from, to,
+   * type} (target acima), ou null. Dentro de comentário ou string não há
+   * ajuda. opts.line: sem palavra útil sob o cursor (espaço, vírgula,
+   * comentário), cai no mnemônico/diretiva da linha ({..., fromLine: true}),
+   * para o painel Ajuda acompanhar a linha inteira.
+   */
+  function helpAt(lineText, col, opts) {
+    const w = wordAt(lineText, col);
+    if (w) {
+      const tok = tokenAt(lineText, Math.min(w.from + 1, w.to));
+      const t = target(w.word, tok ? tok.type : null);
+      if (t) return Object.assign(t, { word: w.word, from: w.from, to: w.to, type: tok ? tok.type : null });
+    }
+    if (opts && opts.line) {
+      const head = statementHead(lineText);
+      const t = head && target(head.text, head.type);
+      if (t) return Object.assign(t, { word: head.text, from: head.from, to: head.to, type: head.type, fromLine: true });
+    }
+    return null;
+  }
+
   const api = {
     setIsa, streamParser, tokenizeLine, scanLabels, labelCompletions, statementKind,
-    completionContext, completionOptions, wordAt, describe, tokenAt, isRegister, LineStream
+    completionContext, completionOptions, wordAt, describe, tokenAt, isRegister, LineStream,
+    target, helpAt, statementHead
   };
   const KsasmLang = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = KsasmLang;

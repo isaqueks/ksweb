@@ -213,6 +213,7 @@ test: all dist $(WASI_PROBE) $(NATIVE_PROBE)
 	$(NODE) test/test_terminal.js
 	$(NODE) test/test_wasm_tools.js --build $(BUILD) --native $(NATIVE) --ksvm2 $(K)
 	$(NODE) test/test_isa.js --isa $(ISA_JSON) --ksas $(KSAS_WASM) --ksvm2 $(K)
+	$(NODE) test/test_isaref.js --isa $(ISA_JSON)
 	$(NODE) test/test_asmtools.js --build $(BUILD) --native $(NATIVE) --ksvm2 $(K)
 	$(NODE) test/test_project.js
 	$(NODE) test/test_worker.js --build $(BUILD)
