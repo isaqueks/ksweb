@@ -347,7 +347,7 @@ sintaxe: sub rd, ra, imm
 exemplo: sub r1, r2, r3          ; r1 = r2 - r3
 
 `rd = ra − rb` (módulo 2³²), calculado como `ra + ~rb + 1`.
-C segue o ARM: C = 1 quando não há empréstimo (`ra ≥ rb` sem sinal); V = overflow com sinal.
+C segue o ARM: C = 1 é o não-borrow (nenhum empréstimo: `ra ≥ rb` sem sinal); V = overflow com sinal.
 `sub zr, ra, rb` equivale a `cmp ra, rb`. Com imediato vira SUBI (ou ADDL com o imediato negado).
 
 ## subi
@@ -770,7 +770,7 @@ resumo: Salta para o endereço que está em `rb`.
 sintaxe: jmpr rb
 exemplo: jmpr r5                 ; pc = r5 (tabela de saltos)
 
-`pc = rb`. Alvo não múltiplo de 4 → fault PC_ALIGN; fora de região executável → PC_RANGE (os dois no fetch seguinte).
+`pc = rb`. Alvo não múltiplo de 4 → fault PC_ALIGN; fora de região executável → PC_RANGE (os dois na busca da instrução seguinte).
 Para `switch` com tabela, ponteiros de função e retorno manual. Flags preservadas.
 
 ## bcond
@@ -802,7 +802,7 @@ sintaxe: callr rb
 exemplo: callr r5                ; chamada indireta
 
 `sp −= 4; [sp] = PC_next; pc = rb`, com `rb` lido antes do ajuste de `sp`.
-Ponteiros de função e vtables (o kscc usa r5). Alvo desalinhado ou fora do código → fault no fetch seguinte; pilha cheia → STACK.
+Ponteiros de função e vtables (o kscc usa r5). Alvo desalinhado ou fora do código → fault na busca seguinte; pilha cheia → STACK.
 
 ## ret
 grupo: controle
@@ -811,7 +811,7 @@ sintaxe: ret
 exemplo: ret                     ; pc = [sp]; sp += 4
 
 `pc = [sp]; sp += 4`: `sp` precisa apontar para o endereço empilhado por `call`, então desempilhe antes o que a função empilhou.
-Flags preservadas; `sp` inválido → fault MEM_RANGE; endereço desalinhado ou fora do código → fault no fetch seguinte.
+Flags preservadas; `sp` inválido → fault MEM_RANGE; endereço desalinhado ou fora do código → fault na busca seguinte.
 
 ## halt
 grupo: sistema
@@ -844,11 +844,11 @@ Syscall desconhecida não é fault: r1 = −1, r2 = NOSYS (1). A lista está na 
 
 ## brk
 grupo: sistema
-resumo: Ponto de parada no código: chama o hook de trace (o depurador da IDE para nela); sem trace é NOP.
+resumo: Ponto de parada no código: chama a função de trace do host (o depurador da IDE para nela); sem trace é NOP.
 sintaxe: brk
 exemplo: brk                     ; para aqui no depurador
 
-Com trace habilitado chama o hook e continua; com `--trace`, `--step` ou `--regs` o `ksvm` imprime `brk at pc=…` e os registradores.
+Com trace habilitado chama essa função e continua; com `--trace`, `--step` ou `--regs` o `ksvm` imprime `brk at pc=…` e os registradores.
 Na IDE, com "parar em BRK" ligado (padrão) o depurador para antes dela. Não altera nada.
 
 ## wfi
@@ -1064,7 +1064,7 @@ inteiro: a >= b sem sinal
 float: maior, igual ou unordered
 resumo: maior ou igual sem sinal (C=1)
 
-Também escrito `bcs` (carry setado).
+Também escrito `bcs` (carry ligado).
 
 ## lo
 apelidos: cc
@@ -1227,7 +1227,7 @@ resumo: Mnemônicos de registrador aceitam imediato e viram a forma I (ou a L, s
 exemplo: add r1, r1, 100000      ; vira addl
 
 Pares: `add/addi`, `sub/subi`, `mul/muli`, `and/andi`, `or/ori`, `xor/xori`, `shl/shli`, `shr/shri`, `sar/sari`, `cmp/cmpi`, `tst/tsti`, `mov/movi`.
-Formas longas: ADDL, ANDL, ORL, XORL, CMPL, MOVIL (SUBI usa ADDL com o imediato negado); MULI, TSTI e os shifts não têm.
+Formas longas: ADDL, ANDL, ORL, XORL, CMPL, MOVIL (SUBI usa ADDL com o imediato negado); MULI, TSTI e os deslocamentos não têm.
 
 ## cmp-imediato
 forma: cmp ra, imm
@@ -1482,7 +1482,7 @@ acesso: leitura (MFSR); escrita só por desvios
 resumo: Contador de programa: endereço da instrução em execução.
 
 `mfsr rd, PC` devolve o endereço da própria MFSR; JMP, JMPR, BCOND, CALL, CALLR e RET mudam o pc.
-Só se executa em endereço múltiplo de 4: um desvio para endereço desalinhado dá fault PC_ALIGN no fetch seguinte.
+Só se executa em endereço múltiplo de 4: um desvio para endereço desalinhado dá fault PC_ALIGN na busca seguinte.
 
 ## FLAGS
 acesso: leitura e escrita (MFSR/MTSR)
@@ -1518,16 +1518,16 @@ resumo: Negativo: bit 31 do resultado (negativo em complemento de dois).
 
 ## C
 bit: 2
-resumo: Carry: vai-um da soma; na subtração e no CMP é o não-borrow (C = 1 se a ≥ b sem sinal); nos shifts, o último bit que saiu.
+resumo: Carry: vai-um da soma; na subtração e no CMP é o não-borrow (C = 1 se a ≥ b sem sinal); nos deslocamentos, o último bit que saiu.
 
-Convenção do ARM (não a do x86): `bhs`/`blo`/`bhi`/`bls` saem direto de C e Z. Shift com contagem 0 zera C.
+Convenção do ARM (não a do x86): `bhs`/`blo`/`bhi`/`bls` saem direto de C e Z. Deslocamento ou rotação com contagem efetiva 0 zera C.
 
 ## V
 bit: 3
 resumo: Overflow com sinal: o resultado não cabe em 32 bits com sinal.
 
 Calculado só por ADD, SUB, ADC, SBC, NEG e CMP (inclusive ADDI, ADDL, SUBI, CMPI, CMPL) e por FCMP (V = 1 só em unordered); MTSR o grava.
-As condições com sinal (`bge` `blt` `bgt` `ble`) comparam N com V; MUL, lógica e shifts preservam V.
+As condições com sinal (`bge` `blt` `bgt` `ble`) comparam N com V; MUL, lógica e deslocamentos preservam V.
 
 # Formatos
 
@@ -1543,7 +1543,7 @@ resumo: Dois registradores e um imediato de 14 bits com sinal.
 alcance: −8192…+8191
 
 4 bytes. `rd, ra, imm` usa os campos ra, rb, imm14 (com sinal estendido para 32 bits).
-O assembler aceita 0…16383 em SYSCALL, MFSR, MTSR, PUSHM e POPM (SYSCALL lê o campo sem sinal) e 0…31 nos shifts SHLI, SHRI e SARI.
+O assembler aceita 0…16383 em SYSCALL, MFSR, MTSR, PUSHM e POPM (SYSCALL lê o campo sem sinal) e 0…31 em SHLI, SHRI e SARI.
 
 ## L
 resumo: Dois registradores e um imediato de 32 bits na palavra seguinte (8 bytes).
@@ -1575,11 +1575,11 @@ Também 0xFF (flash apagada) e os opcodes F com `KSVM_ENABLE_FLOAT=0`.
 endereço: o pc
 resumo: O pc não é múltiplo de 4 (JMPR, CALLR ou RET para endereço desalinhado).
 
-O fault acontece no fetch seguinte ao desvio.
+O fault acontece na busca (fetch) da instrução seguinte ao desvio.
 
 ## PC_RANGE
 endereço: o endereço buscado
-resumo: Fetch fora de uma região executável, ou instrução L com a segunda palavra fora da região.
+resumo: Busca de instrução (fetch) fora de uma região executável, ou instrução L com a segunda palavra fora da região.
 
 Ex.: cair do fim do código sem HALT, ou saltar para a RAM.
 

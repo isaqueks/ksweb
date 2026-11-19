@@ -737,7 +737,7 @@
         cells: [d.key.replace('-', '–'), d.from === d.to ? 'R' + d.from : 'R' + d.from + '–R' + d.to, regRange(isa, d) || '—', this._inline(d.summary), this._inline(d.abi), d.preserve],
         card: () => card(isa, { kind: 'register', key: d.key.split('-')[0] })
       }));
-      this.body.appendChild(this.h('p', { class: 'small muted' }, 'A ABI é convenção (doc 04 §1; detalhes do kscc em kscc/docs/02-abi.md): a VM só impõe zr e o uso de sp por PUSH/POP/CALL/RET.'));
+      this.body.appendChild(this.h('p', { class: 'small muted' }, 'A ABI é convenção (doc 04 §1; detalhes do kscc em kscc/docs/02-abi.md): a VM só impõe zr e o uso de sp por PUSH/POP/CALL/CALLR/RET.'));
       this.body.appendChild(this._table('Registradores', ['Registrador', 'Índice', 'Apelidos', 'Papel', 'ABI (kscc)', 'Preservado por'], rows));
     }
 

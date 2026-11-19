@@ -16,7 +16,7 @@
     "VS": "overflow (V=1)", "VC": "sem overflow (V=0)", "HI": "maior sem sinal (C=1 e Z=0)",
     "LS": "menor ou igual sem sinal (C=0 ou Z=1)", "GE": "maior ou igual com sinal (N=V)",
     "LT": "menor com sinal (N≠V)", "GT": "maior com sinal (Z=0 e N=V)", "LE": "menor ou igual com sinal (Z=1 ou N≠V)",
-    "NV": "nunca", "CS": "= HS (carry setado)", "CC": "= LO (carry limpo)"
+    "NV": "nunca", "CS": "= HS (carry ligado)", "CC": "= LO (carry limpo)"
   },
   "directives": [
     { "name": ".text", "args": "", "desc": "seleciona a seção de código (região CODE)" },
@@ -55,10 +55,10 @@
   "syscalls": {
     "EXIT": "termina com código r1", "CAPS": "r1 = 1 se a syscall r1 existe; CAPS(0x4000) = extensões da ISA",
     "VERSION": "r1 = versão da VM (major<<16 | minor<<8 | patch)", "YIELD": "cede a CPU ao host",
-    "ABORT": "termina com erro", "PUTC": "escreve o byte r1", "GETC": "lê um byte em r1 (-1 no EOF)",
+    "ABORT": "termina com erro", "PUTC": "escreve o byte r1", "GETC": "lê um byte em r1 (-1 sem dado ou no EOF)",
     "PUTS": "escreve r2 bytes a partir de r1", "GETS": "lê uma linha: buffer r1, tamanho r2; r1 = bytes lidos",
     "MILLIS": "r1 = milissegundos desde o boot", "SLEEP_MS": "dorme r1 milissegundos",
-    "MICROS": "r1 = microssegundos (opcional)", "OPEN": "abre arquivo (grupo 3; ENOSYS no navegador)",
+    "MICROS": "r1 = microssegundos (opcional)", "OPEN": "abre arquivo (grupo 3; NOSYS no navegador)",
     "CLOSE": "fecha arquivo (grupo 3)", "READ": "lê de arquivo (grupo 3)", "WRITE": "escreve em arquivo (grupo 3)",
     "SEEK": "posiciona arquivo (grupo 3)", "PIN_MODE": "GPIO (grupo 4)", "PIN_WRITE": "GPIO (grupo 4)",
     "PIN_READ": "GPIO (grupo 4)", "ANALOG_READ": "ADC (grupo 4)", "PWM_WRITE": "PWM (grupo 4)",

@@ -68,7 +68,7 @@ o lint e a montagem não disputam o thread com a VM nem com a digitação.
 | `getc` | lê do anel alimentado por `ksweb_feed`/`ksweb_feed_input`; sem dado, ver §3 |
 | `millis` | import `js_millis()` = `performance.now()` desde o boot da VM (`KsCore.init`, a cada carga), como o `hal_posix` |
 | `sleep_ms` | não dorme: guarda o prazo e põe a VM em `KSVM_YIELD`; o worker retoma depois de `setTimeout(prazo)` |
-| `syscall` | `MICROS` (0x22) por `js_micros()`; grupo 3 (arquivos), GPIO e números de usuário: `KSVM_SYS_UNKNOWN` (`r2 = ENOSYS`) |
+| `syscall` | `MICROS` (0x22) por `js_micros()`; grupo 3 (arquivos), GPIO e números de usuário: `KSVM_SYS_UNKNOWN` (`r1 = −1`, `r2 = NOSYS`) |
 | `on_halt` | registra o código de saída |
 
 ## 3. Suspensão por falta de entrada
