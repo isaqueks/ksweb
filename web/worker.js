@@ -218,6 +218,7 @@ function dispatch(m) {
       if (!session || session.finished) return;
       if (m.slice) session.opts.slice = m.slice;
       if (running) return;    /* já anda: outra cadeia de fatias cortaria o prazo do SLEEP_MS */
+      core.frameOff();        /* Continuar: só breakpoints param */
       running = true;
       status(waiting ? 'waiting' : 'running');
       if (!waiting) schedule(0);
@@ -244,6 +245,11 @@ function dispatch(m) {
         if (!waiting) schedule(0);
         break;
       }
+      /* passo comum (F11, Passo N) com um passo por cima/sair da função
+       * ainda pendente (a VM esperava entrada no meio dele): a parada por
+       * profundidade deixa de valer; ksweb_step não conta call/ret e ela
+       * pararia depois num ret qualquer */
+      core.frameOff();
       const n = Math.max(1, m.n | 0);
       let r;
       if (n === 1) {
