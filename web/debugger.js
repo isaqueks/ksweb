@@ -33,14 +33,17 @@
 
   /* Texto C (até o primeiro 0) com escapes, no máximo n caracteres. */
   function cString(bytes, mask, n) {
+    let end = 0;
+    while (end < bytes.length && mask[end] && bytes[end] !== 0) end++;
+    const closed = end < bytes.length && mask[end] && bytes[end] === 0;
+    const text = new TextDecoder().decode(bytes.subarray(0, end));
     let s = '';
-    for (let i = 0; i < bytes.length && s.length < n; i++) {
-      if (!mask[i]) return s + '…?';
-      const b = bytes[i];
-      if (b === 0) return '"' + s + '"';
-      s += b === 10 ? '\\n' : b === 9 ? '\\t' : b === 13 ? '\\r' : b === 34 ? '\\"' : b === 92 ? '\\\\' : (b >= 32 && b < 127 ? String.fromCharCode(b) : '\\x' + b.toString(16).padStart(2, '0'));
+    for (const ch of text) {
+      if (s.length >= n) return '"' + s + '…';
+      const c = ch.codePointAt(0);
+      s += c === 10 ? '\\n' : c === 9 ? '\\t' : c === 13 ? '\\r' : c === 34 ? '\\"' : c === 92 ? '\\\\' : c < 32 || c === 127 ? '\\x' + c.toString(16).padStart(2, '0') : ch;
     }
-    return '"' + s + '…';
+    return '"' + s + (closed ? '"' : end < bytes.length && !mask[end] ? '…?' : '…');
   }
 
   class DebuggerPanel {
