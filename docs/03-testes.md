@@ -12,7 +12,7 @@ pelo Makefile da ksvm2.
 | `test/test_lineedit.js` | 9 | teclado → bytes, editor de linha (`web/input.js`) com eco pelo VT e atalhos da IDE |
 | `test/test_terminal.js` | 5 | `TerminalView` (`web/terminal.js`) num DOM falso: teclado, mensagens do runner, HTML escapado |
 | `test/test_wasm_tools.js` | 58 | `ksas.wasm`/`ksdis.wasm` pelo shim WASI × `ksas`/`ksdis` nativos |
-| `test/test_isa.js` | 16 | `isa.json` × `isa.def` e as tabelas do ksas; fichas do `tools/isa-doc.md` completas e exemplos montados pelo `ksas.wasm` |
+| `test/test_isa.js` | 19 | `isa.json` × `isa.def` e as tabelas do ksas; fichas do `tools/isa-doc.md` completas, exemplos montados pelo `ksas.wasm` e afirmações das fichas executadas no `ksvm.wasm` |
 | `test/test_isaref.js` | 11 | busca/filtro/ordenação da referência, fichas, mapa de opcodes, "token sob o cursor → ficha" e o render da referência num DOM falso |
 | `test/test_asmtools.js` | 23 | erros (nomes normalizados), alcance dos `.include`, listing, mapa linha ↔ endereço, breakpoint movido, tokenizer, autocomplete, ajuda |
 | `test/test_project.js` | 11 | explorador, IndexedDB falso e fallbacks, `.zip` e inflate |
@@ -21,7 +21,7 @@ pelo Makefile da ksvm2.
 | `test/check_dist.js` | 22 | `dist/`, `ksweb-single.html` e os dois workers pelo protocolo de mensagens |
 | `test/browser_smoke.js` | opcional | a IDE num Chrome/Edge headless (`make test-browser`) |
 
-Total do `make test`: 339 casos em 13 suítes.
+Total do `make test`: 342 casos em 13 suítes.
 
 ## `run_node.js`
 
@@ -156,6 +156,20 @@ syscall iguais aos de `syscall.h`; faixas do mapa de opcodes do doc 04
 §5.8 sem instrução dentro; e o cabeçalho do `isa-doc.md` aponta o doc 04
 como fonte normativa.
 
+**Afirmações das fichas no núcleo**: 36 trechos montados no `ksas.wasm` e
+executados no `ksvm.wasm` conferem registradores, FLAGS e faults contra o
+que as fichas dizem: C em shift por 0 (zera) e no último bit, não-borrow do
+SUB, V do NEG/ADD, MUL e TSTI preservando C e V, `sub zr`, INT_MIN / −1 e o
+sinal do resto, DIV_ZERO (fault_addr = pc), TRAP (fault_addr estendido),
+MEM_PERM ao escrever na ROM, PUSH sp/POP sp, ADR/ADRL relativos a PC_next,
+MFSR PC, loads desalinhados, FCMP (0x2/0x5/0x4/0xC) e `blt`/`bge` com NaN,
+FADD/FDIV especiais sem mexer nas flags, FMIN/FMAX com NaN e ±0, FRINT RNE e
+os arredondamentos, saturação de FTOI/FTOU, ITOF/UTOF, FNEG em NaN, CAPS
+(máscara 0x7, MICROS = 0), syscall desconhecida e MEM_INFO. Também: as
+formas de diretiva citadas nas fichas (`.byte` com string, `\'`, `.org` em
+`.bss`, `fill` de um byte) e o texto das fichas coerente com as flags do
+`isa.def` (nenhuma F além de FCMP altera flags).
+
 ## `test_isaref.js`
 
 `web/isaref.js` e `KsasmLang.helpAt` em Node, com um DOM falso mínimo
@@ -173,9 +187,11 @@ como fonte normativa.
   com a posição na referência;
 - **token sob o cursor → ficha**: mnemônico (meio, fim, maiúsculas),
   registrador e apelido, pseudo, diretiva, `beq`/`b.ge`/`bcs`, rótulo
-  (operando e definição), `b` como pseudo, syscall e SR pelo nome, número,
-  comentário e string (sem ajuda; com `{line: true}` cai no mnemônico da
-  linha), mnemônico desconhecido;
+  (operando e definição, inclusive com nome de mnemônico), `b` como pseudo,
+  syscall e SR pelo nome, número, `sp` dentro de `[sp + 8]`, comentário,
+  string e literal float de `fli`/`.float` (sem ajuda; com `{line: true}`
+  cai no mnemônico da linha), `bcond` (ficha do b<cond>), mnemônico
+  desconhecido;
 - **render**: ficha com sintaxe, resumo, crases em `<code>`, flags, campos
   de bits proporcionais e os botões inserir/copiar/referência; tooltip com
   sintaxe, resumo, codificação e flags; a **referência** com uma linha por
@@ -346,7 +362,8 @@ DevTools Protocol (`make test-browser`, ou pelo Node do Windows:
   cursor no `r1` abre a seção Registradores; na aba Instruções a busca
   `fcmp` (teclas de verdade) põe o FCMP na primeira linha, Enter + Enter
   abrem a ficha (campos de bits do formato R), o mapa de opcodes tem 256
-  células e "Inserir no editor" grava o exemplo no arquivo;
+  células e "Inserir no editor" grava o exemplo no arquivo, com o recuo da
+  linha do cursor (espaços ou tab);
 - duas abas da IDE no mesmo banco: a que só está aberta, ao recarregar, não
   apaga o que a outra salvou;
 - erro no principal não gera erros falsos no arquivo incluído aberto;

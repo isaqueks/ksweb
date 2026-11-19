@@ -79,7 +79,7 @@ fica no WSL (`BUILD.md`):
 | Alvo | O que faz |
 |------|-----------|
 | `make` | `build/ksvm.wasm`, `build/ksas.wasm`, `build/ksdis.wasm`, `build/web/isa.json`, ferramentas nativas da ksvm2 em `build/native/` e exemplos `.ksx` |
-| `make test` | 339 casos em Node: wasm × `ksvm` nativo, `ksas`/`ksdis.wasm` × nativos, isa.json e fichas da ISA (exemplos montados), referência e ajuda ao cursor, mapa de linhas e linguagem do editor, projetos/IndexedDB/zip, terminal VT, editor de linha, formatadores, `dist/` e os dois workers |
+| `make test` | 342 casos em Node: wasm × `ksvm` nativo, `ksas`/`ksdis.wasm` × nativos, isa.json e fichas da ISA (exemplos montados), referência e ajuda ao cursor, mapa de linhas e linguagem do editor, projetos/IndexedDB/zip, terminal VT, editor de linha, formatadores, `dist/` e os dois workers |
 | `make dist` | `dist/` (site estático) e `dist/ksweb-single.html` |
 | `make serve` | `python3 -m http.server` em `dist/` (`PORT=8000`) |
 | `make test-browser` | a IDE num Chrome/Edge headless (opcional; Node 22+) |
