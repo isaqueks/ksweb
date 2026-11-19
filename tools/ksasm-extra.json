@@ -1,0 +1,71 @@
+{
+  "_comment": "Vocabulário do ksas que o isa.def não descreve (doc 07 da KSVM: pseudo-instruções, diretivas, condições, registradores, syscalls). tools/mkisa.js junta isto à saída de tools/isadump e gera build/web/isa.json; test/test_isa.js confere que cada diretiva/pseudo da tabela do ksas está aqui.",
+  "pseudos": [
+    { "name": "li", "operands": ["rd", "valor"], "desc": "carrega constante: MOVI se cabe em 14 bits com sinal, senão MOVIL (8 bytes)" },
+    { "name": "la", "operands": ["rd", "rótulo"], "desc": "carrega endereço: MOVIL rd, rótulo (ADRL PC-relativo com .pic)" },
+    { "name": "fli", "operands": ["rd", "float"], "desc": "carrega float binary32: MOVIL rd, bits (fli r1, 1 carrega 1.0 = 0x3F800000)" },
+    { "name": "clr", "operands": ["rd"], "desc": "zera o registrador: MOV rd, zr" },
+    { "name": "inc", "operands": ["rd"], "desc": "rd = rd + 1 (ADDI; atualiza flags)" },
+    { "name": "dec", "operands": ["rd"], "desc": "rd = rd - 1 (SUBI; atualiza flags)" },
+    { "name": "b", "operands": ["rótulo"], "desc": "desvio incondicional (BCOND AL, ±2 MiB)" },
+    { "name": "j", "operands": ["rótulo"], "desc": "salto incondicional (JMP, ±32 MiB)" }
+  ],
+  "conds": {
+    "AL": "sempre", "EQ": "igual (Z=1)", "NE": "diferente (Z=0)", "HS": "maior ou igual sem sinal (C=1)",
+    "LO": "menor sem sinal (C=0)", "MI": "negativo (N=1)", "PL": "positivo ou zero (N=0)",
+    "VS": "overflow (V=1)", "VC": "sem overflow (V=0)", "HI": "maior sem sinal (C=1 e Z=0)",
+    "LS": "menor ou igual sem sinal (C=0 ou Z=1)", "GE": "maior ou igual com sinal (N=V)",
+    "LT": "menor com sinal (N≠V)", "GT": "maior com sinal (Z=0 e N=V)", "LE": "menor ou igual com sinal (Z=1 ou N≠V)",
+    "NV": "nunca", "CS": "= HS (carry setado)", "CC": "= LO (carry limpo)"
+  },
+  "directives": [
+    { "name": ".text", "args": "", "desc": "seleciona a seção de código (região CODE)" },
+    { "name": ".rodata", "args": "", "desc": "dados só de leitura; vão junto com .text na região CODE" },
+    { "name": ".data", "args": "", "desc": "dados inicializados na RAM" },
+    { "name": ".bss", "args": "", "desc": "dados zerados na RAM (só reserva espaço)" },
+    { "name": ".global", "args": "símbolo", "desc": "marca o símbolo na tabela do .ksx (debug)" },
+    { "name": ".globl", "args": "símbolo", "desc": "sinônimo de .global" },
+    { "name": ".equ", "args": "nome, expr", "desc": "constante simbólica (também: nome = expr)" },
+    { "name": ".byte", "args": "v [, v…]", "desc": "dados de 8 bits" },
+    { "name": ".half", "args": "v [, v…]", "desc": "dados de 16 bits" },
+    { "name": ".word", "args": "v [, v…]", "desc": "dados de 32 bits (aceita rótulos)" },
+    { "name": ".float", "args": "v [, v…]", "desc": "IEEE 754 binary32 little-endian (1.5, -2e3, 0x1.8p1, inf, nan)" },
+    { "name": ".ascii", "args": "\"texto\"", "desc": "string sem terminador (escapes \\n \\t \\r \\0 \\\\ \\\" \\xHH)" },
+    { "name": ".asciz", "args": "\"texto\"", "desc": "string terminada em \\0" },
+    { "name": ".space", "args": "n [, preenchimento]", "desc": "n bytes (em .bss só reserva)" },
+    { "name": ".align", "args": "n", "desc": "alinha a n bytes (potência de 2)" },
+    { "name": ".org", "args": "endereço", "desc": "posição absoluta dentro da seção (só para frente)" },
+    { "name": ".entry", "args": "símbolo", "desc": "ponto de entrada do cabeçalho (padrão: _start, senão 0)" },
+    { "name": ".stack", "args": "n", "desc": "stack_size do cabeçalho (padrão 256)" },
+    { "name": ".include", "args": "\"arquivo\"", "desc": "inclusão textual, relativa ao arquivo que inclui" },
+    { "name": ".pic", "args": "", "desc": "la vira ADRL PC-relativo e a imagem é marcada PIC" }
+  ],
+  "aliases": [
+    { "prefix": "a", "base": 1, "count": 4, "desc": "argumento" },
+    { "prefix": "t", "base": 5, "count": 11, "desc": "temporário" },
+    { "prefix": "s", "base": 16, "count": 14, "desc": "preservado entre chamadas" }
+  ],
+  "registers": {
+    "zr": "r0: sempre zero (escritas são ignoradas)",
+    "fp": "r30: frame pointer",
+    "sp": "r31: stack pointer",
+    "r1": "argumento/retorno (syscalls devolvem r1/r2)",
+    "r2": "argumento/código de erro das syscalls"
+  },
+  "syscalls": {
+    "EXIT": "termina com código r1", "CAPS": "r1 = 1 se a syscall r1 existe; CAPS(0x4000) = extensões da ISA",
+    "VERSION": "r1 = versão da VM (major<<16 | minor<<8 | patch)", "YIELD": "cede a CPU ao host",
+    "ABORT": "termina com erro", "PUTC": "escreve o byte r1", "GETC": "lê um byte em r1 (-1 no EOF)",
+    "PUTS": "escreve r2 bytes a partir de r1", "GETS": "lê uma linha: buffer r1, tamanho r2; r1 = bytes lidos",
+    "MILLIS": "r1 = milissegundos desde o boot", "SLEEP_MS": "dorme r1 milissegundos",
+    "MICROS": "r1 = microssegundos (opcional)", "OPEN": "abre arquivo (grupo 3; ENOSYS no navegador)",
+    "CLOSE": "fecha arquivo (grupo 3)", "READ": "lê de arquivo (grupo 3)", "WRITE": "escreve em arquivo (grupo 3)",
+    "SEEK": "posiciona arquivo (grupo 3)", "PIN_MODE": "GPIO (grupo 4)", "PIN_WRITE": "GPIO (grupo 4)",
+    "PIN_READ": "GPIO (grupo 4)", "ANALOG_READ": "ADC (grupo 4)", "PWM_WRITE": "PWM (grupo 4)",
+    "MEM_INFO": "informações de memória", "RANDOM": "r1 = número pseudoaleatório"
+  },
+  "specialRegs": {
+    "PC": "contador de programa", "FLAGS": "flags Z N C V (única gravável com MTSR)",
+    "ISA_VERSION": "versão da ISA", "INSN_COUNT": "instruções executadas"
+  }
+}
