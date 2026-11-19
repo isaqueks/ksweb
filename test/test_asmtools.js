@@ -70,6 +70,25 @@ test('diagnósticos reais do ksas.wasm com .include e coluna UTF-8', () => {
   eq(r.image, null);
 });
 
+/* O ksas cita o incluído como escrito no .include ("./lib/a.ksasm"); o
+ * explorador chama o arquivo "lib/a.ksasm". Sem normalizar, o erro não ia
+ * para o editor e o breakpoint no incluído não resolvia. */
+test('.include com ./, .. e / : nomes do projeto nos erros e no mapa', () => {
+  const lib = 'f:\n  nop\n  ret\n';
+  for (const inc of ['./lib/a.ksasm', 'lib/../lib/a.ksasm', '/lib/a.ksasm', 'lib/./a.ksasm']) {
+    const r = T.assemble(KSAS, { files: { 'm.ksasm': '_start:\n  call f\n  halt\n  .include "' + inc + '"\n', 'lib/a.ksasm': lib }, main: 'm.ksasm' });
+    ok(r.ok, inc + ': ' + r.stderr);
+    ok(r.info.files.includes('lib/a.ksasm'), inc + ': arquivos ' + JSON.stringify(r.info.files));
+    eq(T.resolveBreakpoint(r.info, 'lib/a.ksasm', 1), { line: 2, addr: 8, moved: true }, inc + ': breakpoint no incluído');
+    eq(r.info.addrLine.get(12), { file: 'lib/a.ksasm', line: 3 }, inc + ': linha atual no incluído');
+    eq([r.info.symByName.get('f').file, r.info.symByName.get('f').line], ['lib/a.ksasm', 1], inc + ': definição do rótulo');
+    const bad = T.assemble(KSAS, { files: { 'm.ksasm': '_start:\n  halt\n  .include "' + inc + '"\n', 'lib/a.ksasm': '\n  foo r1\n' }, main: 'm.ksasm' });
+    eq(bad.diagnostics.filter((x) => x.severity === 'error').map((x) => [x.file, x.line, x.col]), [['lib/a.ksasm', 2, 3]], inc + ': erro no incluído');
+    ok(bad.stderr.startsWith(inc + ':2:3: erro: '), inc + ': stderr do ksas intacto: ' + bad.stderr);
+  }
+  eq(T.parseDiagnostics('../fora.ksasm:1:1: erro: x\n')[0].file, '../fora.ksasm', 'fora da raiz fica como veio');
+});
+
 /* ---- listing e mapa linha <-> endereço ---- */
 
 /* Parser independente do listing nativo: linhas de instrução = 4 ou 8 bytes

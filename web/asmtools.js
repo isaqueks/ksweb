@@ -32,6 +32,15 @@
   const OUT_LST = '.ksweb.lst';
   const dec = new TextDecoder();
 
+  /* Nome de arquivo como o ksas o cita (.include "./lib/x" vira "./lib/x",
+   * "lib/../lib/x" fica assim) -> o caminho do projeto ("lib/x"), o mesmo
+   * que o shim WASI abriu. Fora da raiz ou vazio: como veio. */
+  function normFile(name) {
+    if (!name) return name;
+    const p = Wasi.normPath('', name);
+    return p ? p : name;
+  }
+
   /* ---- diagnósticos ---- */
 
   function parseDiagnostics(stderr) {
@@ -39,11 +48,11 @@
     for (const text of String(stderr || '').split('\n')) {
       if (!text) continue;
       let m = /^(.*?):(\d+):(\d+): erro: (.*)$/.exec(text);
-      if (m) { out.push({ file: m[1], line: +m[2], col: +m[3], message: m[4], text, severity: 'error' }); continue; }
+      if (m) { out.push({ file: normFile(m[1]), line: +m[2], col: +m[3], message: m[4], text, severity: 'error' }); continue; }
       m = /^(.*?):(\d+): erro: (.*)$/.exec(text);
-      if (m) { out.push({ file: m[1], line: +m[2], col: 0, message: m[3], text, severity: 'error' }); continue; }
+      if (m) { out.push({ file: normFile(m[1]), line: +m[2], col: 0, message: m[3], text, severity: 'error' }); continue; }
       m = /^(.*?): erro: (.*)$/.exec(text);
-      if (m) { out.push({ file: m[1], line: 0, col: 0, message: m[2], text, severity: 'error' }); continue; }
+      if (m) { out.push({ file: normFile(m[1]), line: 0, col: 0, message: m[2], text, severity: 'error' }); continue; }
       m = /^ksas: (.*)$/.exec(text);
       if (m) {
         const summary = /erro\(s\); nenhuma saida gerada/.test(m[1]);
@@ -82,7 +91,7 @@
       if (mode === 'rows') {
         if (line.startsWith('ENDERECO')) continue;
         let m = /^; arquivo (.*)$/.exec(line);
-        if (m) { file = m[1]; if (!files.includes(file)) files.push(file); continue; }
+        if (m) { file = normFile(m[1]); if (!files.includes(file)) files.push(file); continue; }
         if (line === '; secoes') { mode = 'sections'; continue; }
         if (line === '') continue;
         m = /^(.{8})  (.*?)  +(\d+)  (.*)$/.exec(line);
@@ -227,7 +236,7 @@
 
   const api = {
     assemble, disassemble, parseDiagnostics, parseListing, buildDebugInfo, resolveBreakpoint,
-    parseKsdis, byteColToChar, OUT_KSX, OUT_LST
+    parseKsdis, byteColToChar, normFile, OUT_KSX, OUT_LST
   };
   if (isNode) module.exports = api;
   else root.AsmTools = api;
