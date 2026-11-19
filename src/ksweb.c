@@ -63,6 +63,9 @@ static uint32_t  bp_count;
 static uint32_t  stop_flags;
 static uint32_t  stop_reason;
 static bool      skip_once;      /* a próxima instrução passa sem checagens */
+static bool      frame_on;       /* parada por profundidade (ksweb_frame_stop) */
+static int32_t   frame_depth;
+static int32_t   frame_target;
 
 static trace_entry trace_ring[KSWEB_TRACE_MAX];
 static brk_snap    brk_snaps[BRK_SNAPS];
@@ -295,6 +298,8 @@ int ksweb_init(uint32_t ram_bytes, uint32_t stack_bytes)
     ram_size = 0u;
     stack_override = stack_bytes;
     skip_once = false;
+    frame_on = false;
+    frame_depth = 0;
     stop_reason = KSWEB_STOP_NONE;
     trace_total = 0u;
     brk_next = 0u;
@@ -367,6 +372,22 @@ static uint32_t dbg_check(void)
     return KSWEB_STOP_NONE;
 }
 
+/* Profundidade depois de executar uma instrução de opcode op; true quando
+ * a parada por profundidade foi atingida (e se desliga). */
+static bool frame_track(uint32_t op)
+{
+    if (op == KSVM_OP_CALL || op == KSVM_OP_CALLR) {
+        frame_depth++;
+    } else if (op == KSVM_OP_RET) {
+        frame_depth--;
+        if (frame_depth == frame_target) {
+            frame_on = false;
+            return true;
+        }
+    }
+    return false;
+}
+
 static int finish(void)
 {
     if (ksweb_hal_rewind(&hw)) {
@@ -391,12 +412,13 @@ int ksweb_run(uint32_t max_insns)
     if (vm.status == KSVM_HALTED || vm.status == KSVM_FAULT) {
         return (int)vm.status;
     }
-    if (bp_count == 0u && stop_flags == 0u) {
+    if (bp_count == 0u && stop_flags == 0u && !frame_on) {
         skip_once = false;
         (void)ksvm_run(&vm, max_insns);    /* caminho rápido */
         return finish();
     }
     for (done = 0u; max_insns == 0u || done < max_insns; done++) {
+        uint32_t op = 0u;
         if (!skip_once) {
             uint32_t r = dbg_check();
             if (r != KSWEB_STOP_NONE) {
@@ -406,12 +428,41 @@ int ksweb_run(uint32_t max_insns)
             }
         }
         skip_once = false;
+        if (frame_on) {
+            uint32_t w = 0u;
+            (void)ksvm_bus_fetch32(&vm.bus, vm.cpu.pc, &w);
+            op = w & 0xFFu;
+        }
         if (ksvm_step(&vm) != KSVM_RUNNING) {
             break;
+        }
+        if (frame_on && frame_track(op)) {
+            stop_reason = KSWEB_STOP_STEP;
+            skip_once = true;
+            return KSWEB_BREAK;
         }
     }
     return finish();
 }
+
+/* Parada por profundidade de chamadas (passo por cima / sair da função):
+ * conta CALL/CALLR (+1) e RET (-1) executados desde ksweb_frame_stop e para
+ * logo depois do RET que deixa a profundidade em "depth" — 0 a partir de um
+ * CALL é "passo por cima", -1 é "sair da função". A parada vale até ser
+ * atingida ou desligada (KSWEB_FRAME_OFF). A instrução atual executa sem
+ * checar breakpoints (a VM já está parada nela). */
+EXPORT("ksweb_frame_stop")
+void ksweb_frame_stop(int32_t depth)
+{
+    frame_on = (depth != KSWEB_FRAME_OFF);
+    frame_depth = 0;
+    frame_target = depth;
+    if (frame_on) {
+        skip_once = true;
+    }
+}
+
+EXPORT("ksweb_frame_depth") int32_t ksweb_frame_depth(void) { return frame_depth; }
 
 /* Uma instrução, sem checagens do depurador (é o próprio "Passo"). */
 EXPORT("ksweb_step")

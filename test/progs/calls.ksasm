@@ -1,0 +1,41 @@
+; calls.ksasm — chamadas aninhadas, recursão e chamada indireta, para os
+; testes de "passo por cima" e "sair da função" (código de saída 11).
+        .text
+        .global _start
+_start:
+        li      r1, 3
+        call    soma            ; soma(3) = 6, recursiva
+        mov     r16, r1
+        call    g               ; g -> h (aninhada)
+        la      r5, tabela
+        ldw     r6, [r5]
+        callr   r6              ; chamada indireta para h
+        add     r1, r16, r3
+        halt                    ; 6 + 5 = 11
+
+; soma(r1) = r1 + soma(r1 - 1), soma(0) = 0
+soma:
+        cmpi    r1, 0
+        beq     soma_fim
+        push    r1
+        dec     r1
+        call    soma
+        pop     r2
+        add     r1, r1, r2
+        ret
+soma_fim:
+        li      r1, 0
+        ret
+
+g:
+        call    h
+        inc     r3
+        ret
+
+h:
+        li      r3, 5
+        ret
+
+        .rodata
+        .align  4
+tabela: .word   h

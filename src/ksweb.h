@@ -26,11 +26,15 @@ enum ksweb_stop {
     KSWEB_STOP_NONE       = 0,
     KSWEB_STOP_BREAKPOINT = 1,
     KSWEB_STOP_BRK        = 2,   /* instrução BRK em pc (opção KSWEB_STOPF_BRK) */
-    KSWEB_STOP_SYSCALL    = 3    /* instrução SYSCALL em pc (KSWEB_STOPF_SYSCALL) */
+    KSWEB_STOP_SYSCALL    = 3,   /* instrução SYSCALL em pc (KSWEB_STOPF_SYSCALL) */
+    KSWEB_STOP_STEP       = 4    /* passo por cima / sair da função concluído (ksweb_frame_stop) */
 };
 
 #define KSWEB_STOPF_BRK     1u
 #define KSWEB_STOPF_SYSCALL 2u
+
+/* ksweb_frame_stop(KSWEB_FRAME_OFF) desliga a parada por profundidade. */
+#define KSWEB_FRAME_OFF INT32_MAX
 
 /* Erro de ksweb_init além dos KSVM_E_* (types.h): memory.grow recusou. */
 #define KSWEB_E_NOMEM (-100)
@@ -87,6 +91,8 @@ void     ksweb_bp_clear_all(void);
 uint32_t ksweb_bp_count(void);
 uint32_t ksweb_bp_get(uint32_t i);
 void     ksweb_set_stop_flags(uint32_t f);
+void     ksweb_frame_stop(int32_t depth);
+int32_t  ksweb_frame_depth(void);
 uint32_t ksweb_trace_enable(uint32_t n);
 void     ksweb_trace_clear(void);
 uint32_t ksweb_trace_total(void);

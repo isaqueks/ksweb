@@ -20,7 +20,8 @@
     RUNNING: 0, HALT: 1, FAULT: 2, YIELD: 3, WAIT_INPUT: 4, BREAK: 5, NOT_LOADED: 6
   });
   const STATE_NAME = ['RUNNING', 'HALT', 'FAULT', 'YIELD', 'WAIT_INPUT', 'BREAK', 'NOT_LOADED'];
-  const STOP_NAME = ['', 'breakpoint', 'BRK', 'syscall'];
+  const STOP_NAME = ['', 'breakpoint', 'BRK', 'syscall', 'step'];
+  const FRAME_OFF = 0x7FFFFFFF;
   /* Códigos de saída do runner nativo (ksvm_main.c). */
   const EXIT = Object.freeze({
     USAGE: 64, IMAGE: 65, NOINPUT: 66, NOMEM: 69, FAULT_BASE: 70, LIMIT: 124, QUIT: 130
@@ -253,6 +254,11 @@
       return r.sort((a, b) => a - b);
     }
     setStopFlags(onBrk, onSyscall) { this.x.ksweb_set_stop_flags((onBrk ? 1 : 0) | (onSyscall ? 2 : 0)); }
+    /* Passo por cima (0, a partir de um CALL) e sair da função (-1): para
+     * depois do RET que deixa a profundidade de chamadas nesse valor. */
+    frameStop(depth) { this.x.ksweb_frame_stop(depth | 0); }
+    frameOff() { this.x.ksweb_frame_stop(FRAME_OFF); }
+    frameDepth() { return this.x.ksweb_frame_depth() | 0; }
     traceEnable(n) { return this.x.ksweb_trace_enable(n >>> 0); }
     traceClear() { this.x.ksweb_trace_clear(); }
     traceCount() { return this.x.ksweb_trace_count(); }
@@ -461,7 +467,7 @@
     }
   }
 
-  const api = { KsCore, KsSession, STATE, STATE_NAME, STOP_NAME, EXIT, REG_NAMES, parseSymbols, hex8 };
+  const api = { KsCore, KsSession, STATE, STATE_NAME, STOP_NAME, FRAME_OFF, EXIT, REG_NAMES, parseSymbols, hex8 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else Object.assign(root, api);
 })(typeof self !== 'undefined' ? self : this);

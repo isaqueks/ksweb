@@ -263,6 +263,37 @@ for (const [label, src] of workerSources()) {
     const d = await w.until((m) => m.type === 'status' && m.state === 'done');
     eq(d.info.code, 0);
   });
+
+  test('worker-' + label + '-passo-por-cima-e-sair', async () => {
+    /* fib: 0x10 "call print_u32" (0x64), 0x14 "subi r18..." */
+    const w = await workerHarness(src);
+    await w.send({ type: 'init', wasm: new Uint8Array(wasmFile).buffer });
+    await w.until((m) => m.type === 'ready');
+    await w.send({ type: 'debug', debug: { on: true, traceN: 0, bps: [0x10], stopBrk: true, stopSyscall: false } });
+    await w.send({ type: 'load', image: exImage('fib'), opts: {} });
+    await w.until((m) => m.type === 'loaded');
+    await w.send({ type: 'run' });
+    eq((await w.until((m) => m.type === 'status' && m.state === 'break')).pc, 0x10);
+    await w.send({ type: 'step', mode: 'over' });
+    const s1 = await w.until((m) => m.type === 'status' && m.state === 'break');
+    eq([s1.reason, s1.pc], ['step', 0x14], 'passo por cima do call');
+    eq(w.outputs(), '0', 'print_u32 rodou inteiro');
+    await w.send({ type: 'step', mode: 'over' });
+    const st = await w.until((m) => m.type === 'stepped');
+    eq(st.pc, 0x14, 'instrução comum: um passo');
+    await w.send({ type: 'debug', debug: { on: true, traceN: 0, bps: [0x64], stopBrk: true, stopSyscall: false } });
+    await w.send({ type: 'run' });
+    eq((await w.until((m) => m.type === 'status' && m.state === 'break')).pc, 0x64);
+    await w.send({ type: 'step', mode: 'into' });
+    await w.until((m) => m.type === 'stepped');
+    await w.send({ type: 'step', mode: 'out' });
+    const s2 = await w.until((m) => m.type === 'status' && m.state === 'break');
+    eq([s2.reason, s2.pc], ['step', 0x14], 'sair da função');
+    eq(w.outputs(), '0 1', 'saída até ali');
+    await w.send({ type: 'debug', debug: { on: true, traceN: 0, bps: [], stopBrk: true, stopSyscall: false } });
+    await w.send({ type: 'run' });
+    eq((await w.until((m) => m.type === 'status' && m.state === 'done')).info.code, 0);
+  });
 }
 
 (async () => {

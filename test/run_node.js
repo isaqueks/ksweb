@@ -152,7 +152,7 @@ badMagic[0] = 0;
 fs.writeFileSync(path.join(WORK, 'badmagic.ksx'), badMagic);
 /* programas de regressão em test/progs/ */
 const PROG = {};
-for (const p of ['bigread', 'millis', 'brkloop']) {
+for (const p of ['bigread', 'millis', 'brkloop', 'calls']) {
   PROG[p] = path.join(WORK, p + '.ksx');
   const r = spawnSync(KSAS, [path.join(__dirname, 'progs', p + '.ksasm'), '-o', PROG[p]]);
   if (r.status !== 0) { console.log('ksas ' + p + ' falhou: ' + r.stderr); process.exit(1); }
@@ -593,6 +593,105 @@ test('reinit-reaproveita-arena', () => {
     eq(s.runSync('').info.code, 0, 'run ' + i);
   }
   ok(core.mem.buffer.byteLength < 16 << 20, 'memória não cresce a cada reinício: ' + core.mem.buffer.byteLength);
+});
+
+/* ---- passo por cima / sair da função (ksweb_frame_stop) ----
+ * Referência independente: o trace do ksvm nativo, com a profundidade de
+ * chamadas contada aqui (CALL/CALLR +1, RET -1). Passo por cima de um CALL
+ * no índice i termina no primeiro j em que a profundidade volta a 0 depois
+ * de um RET; sair da função, quando ela chega a -1. */
+const OP_CALL = 0x73, OP_CALLR = 0x74, OP_RET = 0x75;
+const eqj = (a, b, what) => eq(JSON.stringify(a), JSON.stringify(b), what);
+function callTrace(file) {
+  return traceLines(file).map((l) => ({ pc: parseInt(l.slice(0, 8), 16), op: parseInt(l.slice(10, 12), 16) }));
+}
+function frameExpected(tl, i, target) {
+  let d = 0;
+  for (let j = i; j < tl.length; j++) {
+    if (tl[j].op === OP_CALL || tl[j].op === OP_CALLR) d++;
+    else if (tl[j].op === OP_RET && --d === target) return j + 1;
+  }
+  return -1;                                     /* termina antes */
+}
+function sessionAt(file, i, opts) {
+  const core = newCore();
+  const s = new KsSession(core, opts || {});
+  eq(s.load(fs.readFileSync(file)), null, 'load');
+  for (let k = 0; k < i; k++) core.step();
+  return { core, s };
+}
+
+test('passo-por-cima-de-cada-call', () => {
+  const tl = callTrace(PROG.calls);
+  const calls = tl.map((t, i) => i).filter((i) => tl[i].op === OP_CALL || tl[i].op === OP_CALLR);
+  ok(calls.length >= 7, 'chamadas no trace: ' + calls.length);
+  for (const i of calls) {
+    const want = frameExpected(tl, i, 0);
+    ok(want > i, 'referência para ' + i);
+    const { core, s } = sessionAt(PROG.calls, i);
+    eq(core.pc(), tl[i].pc, 'pc antes');
+    core.frameStop(0);
+    const r = s.tick();
+    eqj([r.action, r.reason], ['break', 'step'], 'parada do passo em ' + i);
+    eq(core.insnCount(), want, 'instruções no passo por cima de ' + i);
+    eq(core.pc(), tl[want].pc, 'pc depois do passo por cima de ' + i);
+    eq(core.pc(), tl[i].pc + (tl[i].op === OP_CALL ? 4 : 4), 'volta à instrução seguinte ao call');
+  }
+});
+
+test('sair-da-funcao-de-cada-ponto', () => {
+  const tl = callTrace(PROG.calls);
+  let inner = 0;
+  for (let i = 0; i < tl.length; i++) {
+    const want = frameExpected(tl, i, -1);
+    const { core, s } = sessionAt(PROG.calls, i);
+    core.frameStop(-1);
+    const r = s.tick();
+    if (want < 0) {                              /* no nível de _start: roda até o fim */
+      eq(r.action, 'done', 'termina a partir de ' + i);
+      eq(r.info.code, 11, 'código');
+      continue;
+    }
+    inner++;
+    eqj([r.action, r.reason], ['break', 'step'], 'parada em ' + i);
+    eqj([core.insnCount(), core.pc()], [want, tl[want].pc], 'sair da função a partir de ' + i);
+    eq(core.frameDepth(), -1, 'profundidade');
+  }
+  ok(inner >= 30, 'pontos dentro de funções: ' + inner);
+});
+
+test('passo-recursivo-e-breakpoint-interrompe', () => {
+  const tl = callTrace(PROG.calls);
+  /* breakpoint em soma_fim (fundo da recursão): sair da função três vezes
+   * sobe um nível por vez, cada vez no "pop r2" depois do call interno */
+  const fim = tl.find((t, i) => i > 0 && tl[i - 1].op === 0x72 && t.op === 0x02).pc;  /* li r1, 0 depois do beq */
+  const core = newCore();
+  const s = new KsSession(core, {});
+  s.load(fs.readFileSync(PROG.calls));
+  core.bpSet(fim);
+  eq(s.tick().reason, 'breakpoint');
+  eq(core.pc(), fim);
+  core.bpClearAll();
+  const pops = [];
+  for (let k = 0; k < 3; k++) {
+    core.frameStop(-1);
+    const r = s.tick();
+    eq(r.reason, 'step', 'subida ' + k);
+    pops.push(core.pc());
+    eq(core.reg(1), [0, 1, 3][k], 'r1 ao subir ' + k);
+  }
+  eq(new Set(pops).size, 1, 'sempre o mesmo "pop r2"');
+  /* passo por cima de "call g" com breakpoint dentro de h: para no h */
+  const callG = tl.findIndex((t, i) => t.op === OP_CALL && i > 3 && tl[i + 1] && tl[i + 1].op === OP_CALL);
+  const { core: c2, s: s2 } = sessionAt(PROG.calls, callG);
+  const h = tl[callG + 2].pc;
+  c2.bpSet(h);
+  c2.frameStop(0);
+  const r = s2.tick();
+  eqj([r.reason, c2.pc()], ['breakpoint', h], 'breakpoint interrompe o passo');
+  c2.frameOff();
+  c2.bpClearAll();
+  eq(s2.runSync(null).info.code, 11, 'continua até o fim');
 });
 
 test('ram-grande-memory-grow', () => {

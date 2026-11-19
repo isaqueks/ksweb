@@ -127,12 +127,14 @@ function handle(r) {
       break;
     case 'break':
       running = false;
+      if (r.reason !== 'step') core.frameOff();      /* um breakpoint interrompe o passo */
       progress(true);
       status('break', { reason: r.reason });
       snapshot();
       break;
     case 'done':
       running = false;
+      core.frameOff();
       progress(true);
       status('done', { info: r.info, cpu: core.cpu() });
       snapshot();
@@ -161,6 +163,12 @@ function snapshot() {
     trace: debug.on && debug.traceN ? core.traceTail(Math.min(debug.traceN, 1000)) : [],
     traceTotal: core.traceTotal(), insns: totalInsns, bps: core.bpList()
   });
+}
+
+/* Opcode em pc é CALL (0x73) ou CALLR (0x74)? */
+function isCallAt(pc) {
+  const r = core.memRead(pc >>> 0, 1);
+  return r.mask[0] === 1 && (r.bytes[0] === 0x73 || r.bytes[0] === 0x74);
 }
 
 function feedInput(bytes) {
@@ -217,6 +225,7 @@ function dispatch(m) {
     case 'pause':
       if (!session) return;
       running = false;
+      core.frameOff();
       clearTimeout(timer);
       flushOutput();
       status(session.finished ? 'done' : 'paused', session.finished ? { info: session.finished } : {});
@@ -226,6 +235,15 @@ function dispatch(m) {
       if (!session || session.finished) return;
       running = false;
       clearTimeout(timer);
+      /* passo por cima de CALL/CALLR e sair da função: parada por
+       * profundidade no laço C (ksweb_frame_stop), a VM anda em fatias */
+      if (m.mode === 'out' || (m.mode === 'over' && isCallAt(core.pc()))) {
+        core.frameStop(m.mode === 'out' ? -1 : 0);
+        running = true;
+        status(waiting ? 'waiting' : 'running', { stepping: m.mode });
+        if (!waiting) schedule(0);
+        break;
+      }
       const n = Math.max(1, m.n | 0);
       let r;
       if (n === 1) {
