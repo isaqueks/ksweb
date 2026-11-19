@@ -276,7 +276,7 @@ exemplo: push r1                 ; sp -= 4; [sp] = r1
 
 `sp −= 4; [sp] = ra`. `push sp` empilha o valor antigo de `sp`. Flags preservadas.
 `push r1, r2, r3` gera um PUSH por registrador, na ordem escrita (desempilhe com `pop r3, r2, r1`).
-`sp − 4` abaixo do limite da pilha → fault STACK; escrita fora da RAM → MEM_RANGE. Em fault `sp` não muda.
+`sp − 4` abaixo do limite da pilha → fault STACK; escrita fora de toda região → MEM_RANGE (numa região só de leitura, MEM_PERM). Em fault `sp` não muda.
 
 ## pop
 grupo: pilha
@@ -357,7 +357,7 @@ sintaxe: subi rd, ra, imm
 exemplo: subi r1, r1, 1          ; r1 = r1 - 1
 
 `rd = ra − sext(imm14)`; flags como SUB (C = não-borrow).
-Não existe SUBL: com imediato fora de −8192…8191 o assembler emite `addl rd, ra, -imm`.
+Não existe SUBL: com imediato já conhecido fora de −8192…8191 o assembler emite `addl rd, ra, -imm` (V difere só com imm = −2³¹).
 `dec rd` = `subi rd, rd, 1`.
 
 ## adc
@@ -811,7 +811,7 @@ sintaxe: ret
 exemplo: ret                     ; pc = [sp]; sp += 4
 
 `pc = [sp]; sp += 4`: `sp` precisa apontar para o endereço empilhado por `call`, então desempilhe antes o que a função empilhou.
-Flags preservadas; `sp` inválido → fault MEM_RANGE.
+Flags preservadas; `sp` inválido → fault MEM_RANGE; endereço desalinhado ou fora do código → fault no fetch seguinte.
 
 ## halt
 grupo: sistema
@@ -839,7 +839,7 @@ sintaxe: syscall número
 exemplo: syscall PUTC            ; escreve o byte de r1
 
 Aceita o nome (`PUTC`, `GETS`, `EXIT`…) ou o número (14 bits sem sinal).
-Retorno em r1 (−1 em erro) e código de erro em r2 (0 = ok); os demais registradores são preservados.
+Retorno em r1 (−1 em erro) e código de erro em r2 (0 = ok); os demais registradores são preservados, exceto em MEM_INFO, que devolve r1–r4.
 Syscall desconhecida não é fault: r1 = −1, r2 = NOSYS (1). A lista está na seção Syscalls da referência.
 
 ## brk
@@ -848,7 +848,7 @@ resumo: Ponto de parada no código: chama o hook de trace (o depurador da IDE pa
 sintaxe: brk
 exemplo: brk                     ; para aqui no depurador
 
-Com trace habilitado chama o hook e continua; o `ksvm --trace` imprime os registradores.
+Com trace habilitado chama o hook e continua; com `--trace`, `--step` ou `--regs` o `ksvm` imprime `brk at pc=…` e os registradores.
 Na IDE, com "parar em BRK" ligado (padrão) o depurador para antes dela. Não altera nada.
 
 ## wfi
@@ -903,8 +903,8 @@ resumo: Grava em `rd` o menor dos floats `ra` e `rb`; com um só NaN, devolve o 
 sintaxe: fmin rd, ra, rb
 exemplo: fmin r1, r2, r3         ; r1 = menor(r2, r3)
 
-`FMIN(−0, +0)` = −0; os dois NaN → NaN canônico `0x7FC00000`.
-Como o `fminf` do C. Sem fault e sem flags.
+`FMIN(−0, +0)` = −0; os dois NaN → NaN canônico `0x7FC00000`; o operando não NaN volta com os bits intactos.
+Como o `fminf` do C, mas com o sinal de zero garantido e um NaN sinalizador também ignorado. Sem fault e sem flags.
 
 ## fmax
 grupo: float
@@ -912,8 +912,8 @@ resumo: Grava em `rd` o maior dos floats `ra` e `rb`; com um só NaN, devolve o 
 sintaxe: fmax rd, ra, rb
 exemplo: fmax r1, r2, r3         ; r1 = maior(r2, r3)
 
-`FMAX(−0, +0)` = +0; os dois NaN → NaN canônico.
-Como o `fmaxf` do C. Sem fault e sem flags.
+`FMAX(−0, +0)` = +0; os dois NaN → NaN canônico; o operando não NaN volta com os bits intactos.
+Como o `fmaxf` do C, mas com o sinal de zero garantido e um NaN sinalizador também ignorado. Sem fault e sem flags.
 
 ## fsqrt
 grupo: float
@@ -1241,6 +1241,9 @@ expande: addl rd, ra, -imm
 resumo: Não existe SUBL: imediato fora de −8192…8191 vira ADDL com o valor negado.
 exemplo: subi r1, r1, 10000      ; vira addl r1, r1, -10000
 
+Mesmo resultado e mesmo C (não-borrow); só V difere, com imm = −2³¹ (`0x80000000` negado é ele mesmo).
+Com `subi` explícito o valor precisa ser conhecido no primeiro passo; `sub rd, ra, imm` assume ADDL para rótulo ainda não definido.
+
 ## push-lista
 forma: push r1, r2, r3
 expande: push r1 / push r2 / push r3
@@ -1295,7 +1298,7 @@ resumo: Seleciona a seção de dados zerados na RAM (só reserva espaço, não o
 sintaxe: .bss
 exemplo: .bss                    ; buffers zerados a seguir
 
-Só aceita `.space` (sem valor de preenchimento) e `.align`; dados inicializados aqui são erro.
+Aceita `.space` (sem valor de preenchimento), `.align` e `.org`; dados inicializados (`.byte`, `.word`, `.float`, `.ascii`…) aqui são erro.
 
 ## .global
 resumo: Marca símbolos como globais na tabela de símbolos do `.ksx` (debug).
@@ -1323,6 +1326,7 @@ sintaxe: .byte v [, v…]
 exemplo: .byte 'A', 0x41, 65     ; três bytes iguais
 
 Cada valor precisa caber em −128…255; aceita caracteres `'c'` e expressões.
+Também aceita strings na lista, sem terminador: `.byte "ab", 0` = `.asciz "ab"`.
 
 ## .half
 resumo: Emite halfwords de 16 bits (little-endian).
@@ -1347,24 +1351,26 @@ Literais como os de `fli` (`0x1.8p1`, `nan`); proibido em `.bss`; sem alinhament
 
 ## .ascii
 resumo: Emite os bytes de uma string, sem terminador.
-sintaxe: .ascii "texto"
+sintaxe: .ascii "texto" [, "texto"…]
 exemplo: .ascii "abc"            ; 3 bytes
 
-Escapes `\n \t \r \0 \\ \" \xHH`; o texto é gravado em UTF-8.
+Escapes `\n \t \r \0 \\ \" \' \xHH`; o texto é gravado em UTF-8.
+Várias strings na mesma linha são gravadas em sequência, sem nada entre elas.
 
 ## .asciz
 resumo: Emite os bytes de uma string terminada em `\0`.
-sintaxe: .asciz "texto"
+sintaxe: .asciz "texto" [, "texto"…]
 exemplo: .asciz "Olá\n"          ; string C terminada em 0
 
-Escapes `\n \t \r \0 \\ \" \xHH`; acentos ocupam mais de um byte (UTF-8).
+Escapes `\n \t \r \0 \\ \" \' \xHH`; acentos ocupam mais de um byte (UTF-8).
+Com várias strings, cada uma recebe o seu `\0`.
 
 ## .space
 resumo: Reserva `n` bytes (preenchidos com `fill`, padrão 0).
 sintaxe: .space n [, fill]
 exemplo: .space 16, 0xFF         ; 16 bytes 0xFF
 
-Em `.bss` só reserva (sem `fill`). `n` precisa ser conhecido no primeiro passo.
+Em `.bss` só reserva (sem `fill`). `n` precisa ser conhecido no primeiro passo; `fill` cabe num byte (−128…255).
 
 ## .align
 resumo: Avança até o próximo múltiplo de `n` bytes (potência de 2).
@@ -1385,7 +1391,7 @@ resumo: Define o ponto de entrada do cabeçalho do `.ksx`.
 sintaxe: .entry símbolo
 exemplo: .entry _start           ; a execução começa em _start
 
-Padrão: `_start`, se existir; senão o endereço 0. Só uma vez por programa.
+Padrão: `_start`, se existir; senão o endereço 0. Só uma vez por programa; fora de `.text` ou desalinhado é erro.
 
 ## .stack
 resumo: Define o tamanho da pilha (`stack_size`) do cabeçalho do `.ksx`.
@@ -1411,7 +1417,7 @@ Vale para o arquivo todo (inclusive `la` antes da diretiva); endereços em `.wor
 # Registradores
 
 ## zr
-resumo: Sempre zero; escritas são descartadas.
+resumo: R0, sempre zero; escritas são descartadas (imposto pela VM).
 abi: constante 0
 preserva: —
 
@@ -1419,53 +1425,55 @@ Ler `zr` dá 0; usado como destino descarta o resultado (`sub zr, r1, r2` é uma
 Base de `[rótulo]` para endereços pequenos; `clr rd` é `mov rd, zr`.
 
 ## r1
-resumo: Geral: argumento 1 e valor de retorno.
+resumo: Registrador geral; pela convenção do kscc (não da ISA), argumento 1 e valor de retorno.
 abi: acumulador; argumento 1; valor de retorno (as syscalls também devolvem em r1)
 preserva: chamador
 
 Apelido `a0`. HALT e `syscall EXIT` usam r1 como código de saída.
 
 ## r2
-resumo: Geral: argumento 2 e segundo retorno.
+resumo: Registrador geral; pela convenção do kscc, argumento 2 (e código de erro depois de uma syscall).
 abi: segundo operando; argumento 2; código de erro das syscalls
 preserva: chamador
 
 Apelido `a1`. Depois de uma syscall: 0 = ok, senão o código KSVM_ERR_*.
+O doc 04 sugere r2 como segundo valor de retorno; o kscc devolve só em r1.
 
 ## r3-r4
-resumo: Gerais: argumentos 3 e 4.
+resumo: Registradores gerais; pela convenção do kscc, argumentos 3 e 4.
 abi: temporários; argumentos 3 e 4
 preserva: chamador
 
-Apelidos `a2` e `a3`. Os argumentos do 5º em diante vão na pilha.
+Apelidos `a2` e `a3`. No kscc os argumentos do 5º em diante vão na pilha (nas funções variádicas, todos).
 
 ## r5-r15
-resumo: Gerais, temporários (caller-saved).
+resumo: Registradores gerais; pela convenção, temporários (caller-saved).
 abi: temporários; r5 guarda o endereço em chamadas indiretas (`callr r5`)
 preserva: chamador
 
 Apelidos `t0`…`t10`. Uma função pode destruí-los: salve-os antes de `call` se precisar deles depois.
 
 ## r16-r29
-resumo: Gerais, preservados entre chamadas (callee-saved).
+resumo: Registradores gerais; pela convenção, preservados entre chamadas (callee-saved).
 abi: reservados para alocação de registradores (o kscc v1 não os usa)
 preserva: chamado
 
 Apelidos `s0`…`s13`. Uma função que os usa salva e restaura (`push`/`pop`).
 
 ## fp
-resumo: R30, frame pointer.
+resumo: R30, frame pointer por convenção (para a VM é um registrador geral).
 abi: frame pointer: base do quadro da função
 preserva: chamado
 
 Prólogo típico: `push fp` / `mov fp, sp`; epílogo: `mov sp, fp` / `pop fp`.
 
 ## sp
-resumo: R31, stack pointer: a pilha cresce para baixo e fica sempre múltiplo de 4.
+resumo: R31, stack pointer: usado por PUSH, POP, CALL, CALLR e RET; a pilha cresce para baixo.
 abi: stack pointer, restaurado no epílogo
 preserva: chamado
 
-PUSH, POP, CALL, CALLR e RET usam `sp`; descer abaixo do limite (`.stack`) dá fault STACK.
+Descer abaixo do limite (`.stack`) com PUSH, CALL ou CALLR dá fault STACK.
+Múltiplo de 4 por convenção (doc 04 §1): a VM não exige; os acessos à pilha não precisam de alinhamento.
 
 # Registradores especiais
 
@@ -1473,7 +1481,8 @@ PUSH, POP, CALL, CALLR e RET usam `sp`; descer abaixo do limite (`.stack`) dá f
 acesso: leitura (MFSR); escrita só por desvios
 resumo: Contador de programa: endereço da instrução em execução.
 
-`mfsr rd, PC` devolve o endereço da própria MFSR; JMP/JMPR/CALL/RET mudam o pc. Sempre múltiplo de 4.
+`mfsr rd, PC` devolve o endereço da própria MFSR; JMP, JMPR, BCOND, CALL, CALLR e RET mudam o pc.
+Só se executa em endereço múltiplo de 4: um desvio para endereço desalinhado dá fault PC_ALIGN no fetch seguinte.
 
 ## FLAGS
 acesso: leitura e escrita (MFSR/MTSR)
@@ -1517,7 +1526,8 @@ Convenção do ARM (não a do x86): `bhs`/`blo`/`bhi`/`bls` saem direto de C e Z
 bit: 3
 resumo: Overflow com sinal: o resultado não cabe em 32 bits com sinal.
 
-Só ADD/SUB/ADC/SBC/NEG/CMP e FCMP (unordered) calculam V (e MTSR o grava); as condições com sinal (`bge` `blt` `bgt` `ble`) comparam N com V.
+Calculado só por ADD, SUB, ADC, SBC, NEG e CMP (inclusive ADDI, ADDL, SUBI, CMPI, CMPL) e por FCMP (V = 1 só em unordered); MTSR o grava.
+As condições com sinal (`bge` `blt` `bgt` `ble`) comparam N com V; MUL, lógica e shifts preservam V.
 
 # Formatos
 
@@ -1526,18 +1536,20 @@ resumo: Três registradores: ra, rb e rc; func9 (bits 23–31) reservado e emiti
 alcance: —
 
 4 bytes. Operações de três operandos `rd, ra, rb` usam os campos ra, rb, rc; de dois (`rd, rb`), ra e rb.
+A VM 2.0 ignora o conteúdo de func9 (não dá fault); assembladores o emitem zerado.
 
 ## I
 resumo: Dois registradores e um imediato de 14 bits com sinal.
 alcance: −8192…+8191
 
-4 bytes. `rd, ra, imm` usa os campos ra, rb, imm14; SYSCALL, MFSR, MTSR, PUSHM e POPM leem o imediato sem sinal (0…16383).
+4 bytes. `rd, ra, imm` usa os campos ra, rb, imm14 (com sinal estendido para 32 bits).
+O assembler aceita 0…16383 em SYSCALL, MFSR, MTSR, PUSHM e POPM (SYSCALL lê o campo sem sinal) e 0…31 nos shifts SHLI, SHRI e SARI.
 
 ## L
 resumo: Dois registradores e um imediato de 32 bits na palavra seguinte (8 bytes).
 alcance: 32 bits completos
 
-Os bits 18–31 da primeira palavra são reservados (zero). O comprimento depende só do opcode.
+Os bits 18–31 da primeira palavra são reservados: emitidos zerados e ignorados pela VM 2.0. O comprimento depende só do opcode.
 
 ## B
 resumo: Desvio condicional: condição de 4 bits e deslocamento de 20 bits com sinal, em palavras.
@@ -1573,7 +1585,7 @@ Ex.: cair do fim do código sem HALT, ou saltar para a RAM.
 
 ## MEM_RANGE
 endereço: o endereço efetivo
-resumo: Load/store (ou PUSH, POP, CALL, RET) fora de toda região mapeada.
+resumo: Load/store (ou PUSH, POP, CALL, CALLR, RET) fora de toda região mapeada.
 
 O acesso inteiro precisa caber numa região: uma palavra que cruza a borda também falha.
 
@@ -1589,9 +1601,10 @@ FDIV não gera fault (dá ±inf ou NaN).
 
 ## STACK
 endereço: o novo sp
-resumo: PUSH ou CALL levariam `sp` abaixo do limite da pilha (`stack_size`).
+resumo: PUSH, CALL ou CALLR levariam `sp` abaixo do limite da pilha (`stack_size`).
 
 Recursão sem fim é o caso típico; aumente `.stack` se for legítimo.
+Só com `KSVM_CHECK_STACK=1` (padrão na ksvm2 e na IDE); POP e RET não verificam o limite.
 
 ## TRAP
 endereço: o código do TRAP/ABORT
@@ -1608,10 +1621,12 @@ Como HALT; o processo sai com `r1 & 0xFF`.
 
 ## CAPS
 args: r1 = número de syscall, ou 0x4000
-retorno: r1 = 1 se existe, 0 se não; com 0x4000, a máscara de extensões
+retorno: r1 = 1 se existe, 0 se não; com 0x4000, a máscara de extensões; r2 = 0
 resumo: Pergunta se uma syscall existe ou, com `r1 = 0x4000`, quais extensões da ISA a VM tem.
 
 Máscara: bit 0 = M (MUL/DIV), bit 1 = B (CLZ/CTZ/POPCNT), bit 2 = F (float); a IDE responde 0x7.
+Só conhece as syscalls do núcleo (grupos 0, 1, 2 e 5): as encaminhadas ao host (MICROS, grupos 3 e 4, ≥ 0x100) respondem 0 mesmo quando o host as implementa.
+Outro valor acima de 0x3FFF responde 0.
 
 ## VERSION
 args: —
@@ -1662,12 +1677,16 @@ resumo: Relógio em milissegundos.
 ## SLEEP_MS
 args: r1 = milissegundos
 retorno: r1 = 0
-resumo: Dorme `r1` milissegundos (a VM cede a vez ao host).
+resumo: Dorme `r1` milissegundos: o host espera, ou a VM cede a vez (YIELD) se o host não sabe dormir.
+
+Na IDE a VM cede a vez e o worker retoma depois do prazo; a página não trava.
 
 ## MICROS
 args: —
 retorno: r1 = microssegundos
 resumo: Relógio em microssegundos (opcional; a IDE implementa).
+
+Vem do host (`hal->syscall`): sem ele, r1 = −1 e r2 = NOSYS; `CAPS` responde 0 mesmo na IDE.
 
 ## OPEN
 args: r1 = caminho, r2 = tamanho, r3 = flags (RD=1, WR=2, CREAT=4, APPEND=8)
