@@ -52,6 +52,23 @@
     return null;
   }
 
+  /* Atalhos da IDE (ksweb.js, no document) -> nome da ação ou null. O
+   * terminal em modo raw consome as teclas que manda ao guest
+   * (preventDefault), então lá só F8, F10 e Ctrl+F9 chegam à IDE. */
+  function ideShortcut(ev) {
+    const k = ev.key, c = ev.ctrlKey || ev.metaKey, s = ev.shiftKey;
+    if (ev.altKey) return null;
+    if (k === 'F5') return c && s ? 'restart' : s ? 'stop' : c ? null : 'run';
+    if (k === 'F8' && !c) return 'toggleRun';
+    if (k === 'F9') return c && !s ? 'debugger' : !c && !s ? 'breakpoint' : null;
+    if (k === 'F10' && !c && !s) return 'step';
+    if (k === 'F11' && !c) return s ? 'stepOut' : 'stepInto';
+    if (k === 'F1' && !c && !s) return 'help';
+    if (c && !s && (k === 'b' || k === 'B')) return 'build';
+    if (c && !s && (k === 's' || k === 'S')) return 'save';
+    return null;
+  }
+
   /* opts: {appCursor, backspace: '\x7f' | '\b', enter: '\r'} */
   function keyToBytes(ev, opts) {
     opts = opts || {};
@@ -206,7 +223,7 @@
     }
   }
 
-  const api = { keyToBytes, pageShortcut, LineEditor };
+  const api = { keyToBytes, pageShortcut, ideShortcut, LineEditor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else Object.assign(root, api);
 })(typeof self !== 'undefined' ? self : this);
