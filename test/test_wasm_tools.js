@@ -146,6 +146,36 @@ for (const [name, text] of Object.entries(BAD)) {
   });
 }
 
+/* .float/fli passam o texto ao strtof da libc. O da wasi-libc (musl) ignora
+ * o sinal de "-nan"; o ksas especifica NaN canônico com o sinal do literal
+ * (ksvm2/tests/ksas/test_ksas_float.c: -nan = 0xFFC00000). Oráculo duplo:
+ * o nativo e os bits esperados. Mais um lote de literais variados. */
+test('float: sinal de -nan e literais variados = nativo', () => {
+  const dir = path.join(WORK, 'floats');
+  fs.mkdirSync(dir, { recursive: true });
+  const lits = ['nan', '-nan', '+nan', '-NaN', 'NAN', '-nan(123)', 'nan(0x1)', '-inf', '+inf', '-infinity', 'INFINITY',
+    '-0.0', '0x1.fffffep127', '0x1p-149', '0x1p-150', '0x1.8p-149', '1.17549435e-38', '1.1754942e-38', '3.4028234e38',
+    '3.40282356e38', '1e-46', '7e-46', '0.1', '-.5', '+1.5', '16777217', '0X1P+4', '1.000000059604644775390625',
+    '1.00000005960464477539062501', '2.5e-45', '4.9e-324', '123456789012345678901234567890'];
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296;
+  for (let i = 0; i < 200; i++) {
+    const m = (rnd() * 10).toFixed(1 + (i % 12)), e = Math.floor(rnd() * 80) - 44;
+    lits.push((rnd() < 0.3 ? '-' : '') + m + 'e' + e);
+  }
+  const text = '_start:\n  fli r1, -nan\n  fli r2, nan\n  halt\n  .data\n' + lits.map((l) => '  .float ' + l + '\n').join('');
+  fs.writeFileSync(path.join(dir, 'f.ksasm'), text);
+  const r = compareAssemble('floats', dir, 'f.ksasm');
+  eq(r.native.code, 0, 'nativo montou: ' + r.native.stderr);
+  const im = r.wasm.files.get('out/f.ksx');
+  const lst = Buffer.from(r.wasm.files.get('out/f.lst')).toString('utf8');
+  ok(/^00000000  [0-9A-F]{2} 01 00 00 00 00 C0 FF /m.test(lst), 'fli r1, -nan = 0xFFC00000');
+  ok(/^00000008  [0-9A-F]{2} 02 00 00 00 00 C0 7F /m.test(lst), 'fli r2, nan = 0x7FC00000');
+  ok(/  00 00 C0 FF\s+\d+\s+\.float -nan\n/.test(lst), '.float -nan = 0xFFC00000');
+  ok(/  00 00 C0 7F\s+\d+\s+\.float \+nan\n/.test(lst), '.float +nan = 0x7FC00000');
+  ok(im && im.length > 0, 'imagem');
+});
+
 test('erro arquivo inexistente e opção inválida', () => {
   for (const argv of [['nada.ksasm'], ['-x', 'a.ksasm'], [], ['a.ksasm', 'b.ksasm']]) {
     const n = native(KSAS_NATIVE, argv, WORK);

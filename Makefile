@@ -46,6 +46,8 @@ KSAS_LIB_SRC = $(filter-out %/main.c,$(KSAS_SRC_ALL))
 KSDIS_SRC    = $(wildcard $(K)/src/tools/ksdis/*.c) $(K)/src/tools/toolio.c
 KSAS_WASM    = $(BUILD)/ksas.wasm
 KSDIS_WASM   = $(BUILD)/ksdis.wasm
+# strtof com o sinal de "-nan" (src/wasi_strtof.c): o da wasi-libc o ignora.
+WASI_FIX_OBJ = $(BUILD)/wasi/wasi_strtof.o
 WASI_CORE_KSAS  = $(patsubst $(K)/src/core/%.c,$(BUILD)/wasi/core/%.o,$(CORE_SRC))
 WASI_CORE_TOOLS = $(patsubst $(K)/src/core/%.c,$(BUILD)/wasi/core-tools/%.o,$(CORE_SRC))
 WASI_KSAS_OBJ   = $(patsubst $(K)/src/tools/ksas/%.c,$(BUILD)/wasi/ksas/%.o,$(KSAS_SRC_ALL))
@@ -119,13 +121,18 @@ $(BUILD)/wasi/ksas/%.o: $(K)/src/tools/ksas/%.c
 	@echo "  CC(wasi) ksas/$(notdir $<)"
 	@$(CLANG) $(WASI_CFLAGS) -I$(K)/src/tools/ksas -c $< -o $@
 
+$(WASI_FIX_OBJ): src/wasi_strtof.c
+	@mkdir -p $(dir $@)
+	@echo "  CC(wasi) wasi_strtof.c"
+	@$(CLANG) $(WASI_CFLAGS) -c $< -o $@
+
 $(BUILD)/wasi/tools/%.o: $(K)/src/tools/%.c
 	@mkdir -p $(dir $@)
 	@echo "  CC(wasi) $(patsubst $(K)/src/tools/%,%,$<)"
 	@$(CLANG) $(WASI_CFLAGS) $(TOOLS_DEFS) -c $< -o $@
 
-$(KSAS_WASM): $(WASI_KSAS_OBJ) $(WASI_CORE_KSAS)
-	@$(WASM_LD) $^ $(WASI_LDFLAGS) -o $@
+$(KSAS_WASM): $(WASI_KSAS_OBJ) $(WASI_CORE_KSAS) $(WASI_FIX_OBJ)
+	@$(WASM_LD) $^ $(WASI_LDFLAGS) --wrap=strtof -o $@
 	@echo "ksas.wasm: $$(wc -c <$@) bytes"
 
 $(KSDIS_WASM): $(WASI_KSDIS_OBJ) $(WASI_CORE_TOOLS)
