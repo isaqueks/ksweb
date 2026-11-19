@@ -269,6 +269,32 @@ test('projeto -> zip -> projeto (manifesto)', async () => {
   await throwsMsg(() => P.projectFromZip(P.makeZip([{ name: 'x.bin', data: 'x' }])), /não tem arquivos/);
 });
 
+/* Exportar e reimportar não pode perder nem renomear nada: um projeto cujos
+ * arquivos estão todos numa pasta ("src/...") não tem pasta-raiz a remover
+ * (o manifesto fica na raiz do zip), e arquivos que o explorador aceita sem
+ * extensão de fonte (defs.h, Makefile, notas) voltam também. */
+test('projeto -> zip -> projeto preserva pastas, breakpoints e todos os arquivos', async () => {
+  const p = P.Project.create('src', {
+    'src/main.ksasm': '  .include "lib/io.ksasm"\n_start: halt\n', 'src/lib/io.ksasm': 'f: ret\n',
+    'src/defs.h': 'N = 3\n', 'src/Makefile': 'all:\n', 'src/notas': 'lembrete\n'
+  }, 'src/main.ksasm');
+  p.setBreakpoints('src/main.ksasm', [2]);
+  p.setBreakpoints('src/lib/io.ksasm', [1]);
+  const q = await P.projectFromZip(P.projectToZip(p), 'src.zip');
+  eq(q.fileNames(), p.fileNames(), 'mesmos nomes');
+  for (const n of p.fileNames()) eq(q.text(n), p.text(n), 'texto de ' + n);
+  eq(q.main, 'src/main.ksasm', 'principal');
+  eq([q.breakpoints.get('src/main.ksasm'), q.breakpoints.get('src/lib/io.ksasm')], [[2], [1]], 'breakpoints');
+  /* o mesmo zip dentro de uma pasta-raiz (extraído e recompactado): ela sai */
+  const entries = (await P.readZip(P.projectToZip(p))).map((e) => ({ name: 'exportado/' + e.name, data: e.data }));
+  const r = await P.projectFromZip(P.makeZip(entries), 'x.zip');
+  eq([r.fileNames(), r.main, r.breakpoints.get('src/main.ksasm')], [p.fileNames(), 'src/main.ksasm', [2]], 'com pasta-raiz');
+  /* breakpoints do manifesto que não são listas de linhas são ignorados */
+  const bad = P.makeZip([{ name: 'a.ksasm', data: 'halt\n' }, { name: P.MANIFEST, data: JSON.stringify({ main: 'a.ksasm', breakpoints: { 'a.ksasm': '123' } }) }]);
+  const s = await P.projectFromZip(bad);
+  ok(!s.breakpoints.has('a.ksasm') || s.breakpoints.get('a.ksasm').every((x) => typeof x === 'number'), 'linhas numéricas');
+});
+
 test('zip gerado abre no zipfile do Python', async () => {
   const z = P.projectToZip(P.Project.create('py', { 'main.ksasm': 'halt\n', 'lib/x.ksasm': 'nop\n' }, 'main.ksasm'));
   const r = spawnSync('python3', ['-c', 'import sys,zipfile,io\nz=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read()))\nassert z.testzip() is None\nprint(",".join(sorted(z.namelist())))'], { input: Buffer.from(z) });

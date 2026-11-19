@@ -467,17 +467,32 @@
     return makeZip(entries);
   }
 
-  /* .zip -> Project. Uma pasta-raiz única ("proj/a.ksasm") é removida. */
+  /* .zip -> Project. Com o manifesto (zip exportado pela IDE), a pasta dele é
+   * a raiz do projeto e todos os arquivos com nome válido entram (o
+   * explorador aceita qualquer extensão: exportar e reimportar não perde
+   * nada). Sem manifesto, só fontes/texto (TEXT_EXT), e uma pasta-raiz
+   * única ("proj/a.ksasm") é removida. */
   async function projectFromZip(bytes, fallbackName) {
     const entries = await readZip(bytes);
-    let manifest = null;
-    const files = entries.filter((e) => {
-      if (e.name === MANIFEST || e.name.endsWith('/' + MANIFEST)) { try { manifest = JSON.parse(dec.decode(e.data)); } catch (x) { /* ignora */ } return false; }
-      return TEXT_EXT.test(e.name);
-    });
-    const tops = new Set(files.map((f) => (f.name.includes('/') ? f.name.split('/')[0] : '')));
-    const strip = tops.size === 1 && !tops.has('') ? [...tops][0].length + 1 : 0;
-    const p = new Project({ name: (manifest && manifest.name) || fallbackName || 'importado' });
+    let manifest = null, base = null;
+    for (const e of entries) {
+      if (e.name !== MANIFEST && !e.name.endsWith('/' + MANIFEST)) continue;
+      const dir = e.name.slice(0, e.name.length - MANIFEST.length);
+      if (base !== null && dir.length >= base.length) continue;      /* o mais raso */
+      try { manifest = JSON.parse(dec.decode(e.data)); base = dir; } catch (x) { /* ignora */ }
+    }
+    if (!manifest || typeof manifest !== 'object') { manifest = null; base = null; }
+    const isManifest = (n) => n === MANIFEST || n.endsWith('/' + MANIFEST);
+    let files, strip;
+    if (base !== null) {
+      files = entries.filter((e) => e.name.startsWith(base) && e.name !== base + MANIFEST);
+      strip = base.length;
+    } else {
+      files = entries.filter((e) => !isManifest(e.name) && TEXT_EXT.test(e.name));
+      const tops = new Set(files.map((f) => (f.name.includes('/') ? f.name.split('/')[0] : '')));
+      strip = tops.size === 1 && !tops.has('') ? [...tops][0].length + 1 : 0;
+    }
+    const p = new Project({ name: (manifest && typeof manifest.name === 'string' && manifest.name) || fallbackName || 'importado' });
     for (const f of files) {
       const n = f.name.slice(strip);
       if (checkName(n)) continue;
@@ -486,7 +501,11 @@
     if (!p.files.size) throw new Error('o .zip não tem arquivos de fonte (.ksasm, .asm, .s, .inc)');
     const names = p.fileNames();
     p.main = manifest && p.files.has(manifest.main) ? manifest.main : (names.find((n) => /(^|\/)main\.ksasm$/.test(n)) || names.find((n) => n.endsWith('.ksasm')) || names[0]);
-    if (manifest && manifest.breakpoints) for (const [k, v] of Object.entries(manifest.breakpoints)) if (p.files.has(k)) p.setBreakpoints(k, v);
+    if (manifest && manifest.breakpoints && typeof manifest.breakpoints === 'object') {
+      for (const [k, v] of Object.entries(manifest.breakpoints)) {
+        if (p.files.has(k) && Array.isArray(v)) p.setBreakpoints(k, v.filter((x) => Number.isInteger(x)));
+      }
+    }
     p.open = [p.main];
     p.active = p.main;
     return p;
