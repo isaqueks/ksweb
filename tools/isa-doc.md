@@ -1779,15 +1779,15 @@ resumo: Era MOVHI (redundante com MOVIL); agora gera BAD_OPCODE.
 
 ## 0x80-0x9F
 estado: reservado
-resumo: Reservados para extensões futuras do núcleo.
+resumo: Livres, reservados para extensões futuras do núcleo (doc 04 §5.8); executar dá BAD_OPCODE.
 
 ## 0xB2-0xBF
 estado: reservado
-resumo: Reservados para a extensão F (ex.: FMADD, conversões de/para 64 bits).
+resumo: Reservados para a extensão F (ex.: FMADD, conversões de/para 64 bits); executar dá BAD_OPCODE.
 
 ## 0xC0-0xEF
 estado: plataforma
-resumo: Extensões específicas de plataforma (ex.: AVR_IO), nunca no núcleo.
+resumo: Extensões específicas de plataforma (ex.: AVR_IO), nunca no núcleo; a VM 2.0 e a IDE não têm nenhuma (BAD_OPCODE).
 
 ## 0xF0-0xFF
 estado: inválido
