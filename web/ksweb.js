@@ -710,18 +710,28 @@
 
   /* ---- projeto, explorador e abas ---- */
 
+  /* S.dirty: esta aba alterou o projeto desde o último salvamento. Só
+   * então trocar de projeto ou fechar a página salva (flushSave): uma aba
+   * ociosa não sobrescreve o que outra aba da IDE salvou no mesmo banco. */
   function scheduleSave(now) {
+    S.dirty = true;
     clearTimeout(S.saveTimer);
     const doSave = async () => {
+      S.dirty = false;
       try {
         await S.store.save(S.project);
         await S.store.setMeta('last', S.project.id);
         if (now) status('projeto salvo (' + S.store.kind + ')');
-      } catch (e) { status('não consegui salvar: ' + e.message, true); }
+      } catch (e) { S.dirty = true; status('não consegui salvar: ' + e.message, true); }
     };
     if (now) return doSave();
     S.saveTimer = setTimeout(doSave, 400);
     return null;
+  }
+
+  function flushSave() {
+    clearTimeout(S.saveTimer);
+    return S.dirty && S.project && S.store ? scheduleSave(true) : Promise.resolve();
   }
 
   function onEdit(name, text) {
@@ -738,6 +748,7 @@
     for (const n of [...editor.states.keys()]) editor.forget(n);
     editor.deactivate();
     S.project = p;
+    S.dirty = false;                 /* p é o que está no banco */
     S.version++;
     S.lint = null;
     S.built = null;
@@ -941,13 +952,13 @@
 
   async function switchProject(id) {
     if (id === S.project.id) return;
-    await scheduleSave(true);
+    await flushSave();
     const p = await S.store.load(id);
     if (p) { setProject(p); status('projeto ' + p.name + ' aberto'); }
   }
 
   async function newProject(name, files, main, example) {
-    await scheduleSave(true);
+    await flushSave();
     const p = Project.create(name, files, main);
     p.example = example || null;
     await S.store.save(p);
@@ -960,7 +971,7 @@
       openKsx(b64ToBytes(ex.b64), ex.name + '.ksx');
       return;
     }
-    await scheduleSave(true);
+    await flushSave();
     const list = await S.store.list();
     const found = list.find((p) => p.example === ex.name);
     let p = found ? await S.store.load(found.id) : null;
@@ -992,7 +1003,7 @@
       if (/\.zip$/i.test(f.name)) {
         try {
           const p = await KsProject.projectFromZip(bytes, f.name.replace(/\.zip$/i, ''));
-          await scheduleSave(true);
+          await flushSave();
           await S.store.save(p);
           setProject(p);
           status('projeto importado de ' + f.name + ': ' + p.files.size + ' arquivo(s)');
@@ -1348,7 +1359,7 @@
       e.preventDefault();
       doShortcut(act);
     });
-    window.addEventListener('beforeunload', () => { if (S.project && S.store) S.store.save(S.project); });
+    window.addEventListener('beforeunload', () => { if (S.dirty && S.project && S.store) S.store.save(S.project); });
     setupExamples();
     setupDrop();
     setupTermSize();

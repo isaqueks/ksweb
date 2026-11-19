@@ -350,6 +350,27 @@ async function openPage(url) {
     await scenario(await openPage(single), 'single');
     srv = await serve(DIST);
     await scenario(await openPage('http://127.0.0.1:' + srv.address().port + '/index.html'), 'http');
+    log('duas abas da IDE');
+    await check('aba ociosa fechada/recarregada não sobrescreve o que a outra salvou', async () => {
+      const url = 'http://127.0.0.1:' + srv.address().port + '/index.html';
+      const a = await openPage(url);
+      await a.until('window.ksweb && ksweb.state.project && ksweb.state.asm.ready', 10000, 'aba A');
+      const b = await openPage(url);
+      await b.until('window.ksweb && ksweb.state.project && ksweb.state.asm.ready', 10000, 'aba B');
+      const id = await a.eval('ksweb.state.project.id');
+      if (await b.eval('ksweb.state.project.id') !== id) throw new Error('as abas abriram projetos diferentes');
+      const main = await b.eval('ksweb.state.project.main');
+      await b.eval(`(() => { ksweb.openTab(${JSON.stringify(main)}); ksweb.editor.view.dispatch({ changes: { from: 0, insert: '; editado na aba B\\n' } }); return true; })()`);
+      const saved = `ksweb.state.store.load(${JSON.stringify(id)}).then((p) => p.text(${JSON.stringify(main)}).startsWith('; editado na aba B'))`;
+      for (let i = 0; !(await b.eval(saved)); i++) { if (i > 80) throw new Error('B não salvou'); await sleep(50); }
+      await a.send('Page.reload');                       /* beforeunload na aba A, que não editou nada */
+      await sleep(500);
+      await a.until('window.ksweb && ksweb.state.project && ksweb.state.store', 10000, 'A recarregada');
+      const t = await a.eval(`ksweb.state.store.load(${JSON.stringify(id)}).then((p) => p.text(${JSON.stringify(main)}).slice(0, 40))`);
+      if (!t.startsWith('; editado na aba B')) throw new Error('a edição da aba B se perdeu: ' + JSON.stringify(t));
+      const p = a.problems().concat(b.problems());
+      if (p.length) throw new Error(p.join('\n'));
+    });
     const light = await openPage(single);
     await light.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
     log('tema claro');
